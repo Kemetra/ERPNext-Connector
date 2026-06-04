@@ -73,11 +73,11 @@ authoritative wire reality, fixed by the only contract that exists
 (`posting-feed.yaml`), is that the **connector is the HTTP client** (it pulls from and acks to
 DP2 via `connectorBearer`); DP2 makes no outbound calls. Per standing-rules §0 the constitution
 is supreme, so this policy does **not** reverse the wire direction to match the G4 prose;
-instead it flags that the constitution's G4 wording is ambiguous between authority and
-transport direction and **warrants a PATCH amendment** to disambiguate (e.g. "the connector
-authenticates *to* Data-Pulse-2 as a tenant-scoped machine principal"). This document is the
-artifact that surfaces that ambiguity; the amendment is tracked as follow-up, separate from
-this spec.
+instead it flagged that the constitution's G4 wording was ambiguous between authority and
+transport direction. **Resolved**: constitution **v1.0.1** (PATCH) disambiguates G4 to state
+that the connector authenticates *to* Data-Pulse-2 at the transport layer (connector is the
+client) while DP2 remains the upstream authority. This document is the artifact that surfaced
+the ambiguity; the amendment now reconciles it.
 
 ---
 

@@ -1,8 +1,16 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: (none / template) → 1.0.0
-Bump rationale: Initial ratification of the project constitution (new document,
+Version change: 1.0.0 → 1.0.1 (latest)
+Bump rationale (1.0.1, PATCH — clarification, no semantic change): Disambiguate the Gate G4
+  wording on authentication direction. The original text ("Data-Pulse-2 MUST authenticate to
+  the connector") conflated authority/data-origin direction with HTTP/transport direction.
+  Clarified that at the transport layer the connector authenticates TO Data-Pulse-2 (connector
+  is the client; DP2 makes no outbound calls), per the authoritative DP2 connector contract
+  and spec 003's auth policy. No principle added/removed; security intent unchanged.
+  Surfaced by docs/decisions/data-pulse-auth-and-api-policy.md.
+Prior — Version change: (none / template) → 1.0.0
+Prior — Bump rationale: Initial ratification of the project constitution (new document,
   no prior version). MAJOR baseline established.
 
 Principles defined (7):
@@ -109,9 +117,15 @@ expensive rework and ensures every mutation traces back to an approved specifica
 
 ## Security & Compliance Requirements
 
-- **Authentication & secrets (Gate G4)**: Data-Pulse-2 MUST authenticate to the connector
-  using a defined service-auth model. Tokens MUST be stored securely and MUST NOT be
-  exposed in logs or UI. Tenant isolation MUST be verified for every data surface.
+- **Authentication & secrets (Gate G4)**: The connector and Data-Pulse-2 MUST use a defined
+  service-auth model on a tenant-scoped, revocable machine principal. At the HTTP/transport
+  layer the **connector authenticates *to* Data-Pulse-2** (the connector is the client — it
+  pulls work from and acks outcomes to DP2; DP2 makes no outbound calls), per the authoritative
+  DP2 connector contract. (Data-Pulse-2 remains the upstream *authority* whose operational
+  traffic the connector serves — that authority/data-origin direction is distinct from the
+  transport direction.) Tokens MUST be stored securely and MUST NOT be exposed in logs or UI.
+  Tenant isolation MUST be verified for every data surface. See
+  `docs/decisions/data-pulse-auth-and-api-policy.md` (spec 003).
 - **Transport & access**: IP restrictions and rate-limit/retry policy MUST be defined
   before business endpoints are implemented. Requests MUST use the agreed request/response
   envelope and carry correlation IDs.
@@ -165,4 +179,4 @@ ad-hoc convenience, this document wins.
 - **Runtime guidance**: Use `README.md` and `CLAUDE.md` for day-to-day development
   guidance; this constitution governs the non-negotiable rules they operate within.
 
-**Version**: 1.0.0 | **Ratified**: 2026-06-04 | **Last Amended**: 2026-06-04
+**Version**: 1.0.1 | **Ratified**: 2026-06-04 | **Last Amended**: 2026-06-04
