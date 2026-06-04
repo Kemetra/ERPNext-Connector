@@ -61,10 +61,13 @@ Single custom Frappe app at the repository root. App package:
 
 ### Tests for User Story 1 ⚠️
 
-> Write these FIRST, ensure they FAIL before implementation (no app installed yet).
+> **Bench-dependent validation** (not locally-runnable red-green TDD): these tests assert
+> against a *live installed app* (installed-apps list, DocType registration), so they
+> execute on a staging ERPNext bench, not in this repo. Author them before T009/T010;
+> run them on the bench during T020.
 
-- [ ] T007 [P] [US1] Write install + metadata test in `retail_tower_erpnext_connector/tests/test_foundation.py`: asserts the app is in the site's installed-apps list and that `hooks.py` exposes the required metadata fields (FR-001, FR-002)
-- [ ] T008 [P] [US1] Write no-business-mutation test in `retail_tower_erpnext_connector/tests/test_foundation.py`: asserts the app declares NO DocType that writes product/stock/price/sales data and registers NO document-event/scheduled hooks touching business data (FR-005)
+- [ ] T007 [US1] Write install + metadata test in `retail_tower_erpnext_connector/tests/test_foundation.py`: asserts the app is in the site's installed-apps list and that `hooks.py` exposes the required metadata fields (FR-001, FR-002)
+- [ ] T008 [US1] Write no-business-mutation + no-fork test in `retail_tower_erpnext_connector/tests/test_foundation.py`: asserts the app declares NO DocType that writes product/stock/price/sales data, registers NO document-event/scheduled hooks touching business data (FR-005), and embeds NO copied ERPNext/Frappe core modules (FR-006)
 
 ### Implementation for User Story 1
 
@@ -83,14 +86,14 @@ Single custom Frappe app at the repository root. App package:
 
 ### Tests for User Story 2 ⚠️
 
-- [ ] T011 [P] [US2] Write singleton test in `retail_tower_erpnext_connector/tests/test_foundation.py`: asserts `Connector Settings` is a Single DocType and resolves to exactly one record (FR-004, research.md Decision 1)
+- [ ] T011 [US2] Write singleton test in `retail_tower_erpnext_connector/tests/test_foundation.py`: asserts `Connector Settings` is a Single DocType and resolves to exactly one record (FR-004, research.md Decision 1) — bench-dependent, same file as T007/T008 so author sequentially
 
 ### Implementation for User Story 2
 
 - [ ] T012 [US2] Create `retail_tower_erpnext_connector/retail_tower_erpnext_connector/doctype/connector_settings/connector_settings.json` defining `Connector Settings` as a **Single** DocType in the `Connector` module, with no functional fields (at most a non-functional placeholder note), System Manager read/write permissions only (data-model.md)
 - [ ] T013 [P] [US2] Create `retail_tower_erpnext_connector/retail_tower_erpnext_connector/doctype/connector_settings/connector_settings.py` with the controller class and NO business logic (data-model.md, FR-005)
 - [ ] T014 [P] [US2] Create the doctype `__init__.py` files so the DocType package imports cleanly
-- [ ] T015 [US2] Reinstall/migrate on staging and confirm exactly one Connector Settings record exists and opens, and a second install does not duplicate it (US2 acceptance, reinstall edge case)
+- [ ] T015 [US2] Reinstall/migrate on staging and confirm exactly one Connector Settings record exists and opens, and a second install does not duplicate it (US2 acceptance, reinstall edge case). SC-002 (locate settings from docs) is validated via T017 + T021, not here.
 
 **Checkpoint**: User Stories 1 AND 2 both work independently.
 
@@ -143,7 +146,7 @@ Single custom Frappe app at the repository root. App package:
 ### Parallel Opportunities
 
 - T003, T004 (Setup) run in parallel.
-- T007, T008 (US1 tests) run in parallel — same file, but additive test functions; if authored separately, sequence them.
+- T007, T008, T011 (tests) all write `test_foundation.py` — NOT parallel; author sequentially (no `[P]` marker).
 - T013, T014 (US2) parallel with each other.
 - T016, T017, T018 (US3 docs) all parallel — different files, no code dependency.
 - US3 (docs) can proceed in parallel with US1/US2 entirely.
