@@ -1,0 +1,294 @@
+# Agent OS v1 — Slice Schema for Retail Tower ERPNext Connector
+#
+# Every entry under `slices:` in an execution-map.yaml MUST conform to this
+# schema. Maestro composes per-slice dispatch prompts directly from these
+# fields; missing or malformed fields are a hard stop.
+#
+# Slices reference Spec-Kit task IDs (specs/NNN/tasks.md) as first-class IDs.
+
+version: 1
+
+# ----------------------------------------------------------------------------
+# Slice schema — every field's type, allowed values, and meaning.
+# ----------------------------------------------------------------------------
+
+schema:
+  id:
+    type: string
+    required: true
+    description: >
+      Unique slice identifier within a spec. ALL_CAPS_SNAKE_CASE or a Spec-Kit
+      task ID (e.g. "T012"), a descriptive name ("UOM_DECISION_RECORD"), or a
+      hybrid ("T012_CONNECTOR_SETTINGS_DOCTYPE").
+
+  task_ids:
+    type: list[string]
+    required: false
+    description: >
+      Task IDs from the spec's tasks.md that this slice covers (e.g. ["T012"]).
+      May be empty for slices outside the planned task list (e.g. discovered
+      defect fixes or closeouts). Used for cross-reference, not dispatch.
+
+  type:
+    type: enum
+    required: true
+    values: [feat, fix, test, refactor, docs, chore, perf, ci]
+    description: >
+      Matches the git commit type. Determines branch prefix and commit
+      subject prefix. NOTE: much connector work is `docs` (mapping references,
+      decision records, runbooks).
+
+  status:
+    type: enum
+    required: true
+    values:
+      - proposed           # listed in the map, not approved for execution
+      - blocked            # depends_on incomplete OR a finding/decision blocks it
+      - ready              # all predecessors complete, no approval beyond standing rules
+      - approved           # gated slice the user has explicitly approved
+      - in_progress        # actively being worked
+      - local_uncommitted  # work exists on disk, not yet staged/committed
+      - committed          # local commits exist, not pushed
+      - pushed             # remote branch exists, no PR
+      - in_review          # PR open
+      - merged             # landed on main
+      - closed             # abandoned / superseded
+    description: >
+      Authoritative status. Maestro updates this as the slice progresses; the
+      user reviews status transitions before they take effect on the map.
+
+  approval_required:
+    type: boolean
+    required: true
+    description: >
+      `true` when the slice touches any gated surface (standing-rules §3:
+      `.specify/**`, hooks.py, DocType JSON, pyproject.toml, patches/migrations,
+      .github/**, merged spec artifacts), or when the user has marked it gated.
+      Maestro will not dispatch until the user has approved this specific slice
+      in the current session.
+
+  depends_on:
+    type: list[string]
+    required: true
+    description: >
+      Slice IDs (within this spec or cross-referenced) that must reach a
+      terminal state before this slice moves from blocked to ready. May also
+      reference an unsigned mapping decision (e.g. a slice blocked until
+      docs/decisions/mapping-uom.md is signed). May be empty.
+
+  blocks:
+    type: list[string]
+    required: false
+    description: >
+      Slice IDs that cannot proceed until this slice completes. Inverse of
+      depends_on. Maintained for legibility.
+
+  agent:
+    type: string
+    required: true
+    description: >
+      Profile key from docs/agent-os/agent-profiles.yaml:
+      "opus-maestro", "frappe-app", "frappe-test", "docs-mapping", "reviewer".
+
+  allowed_files:
+    type: list[string]
+    required: true
+    description: >
+      Explicit list of files (or globs) the worker may create or modify.
+      Anything outside is forbidden for this slice. Use exact paths where
+      possible; reserve globs for genuinely bulk slices.
+
+  forbidden_files:
+    type: list[string]
+    required: false
+    description: >
+      Optional additional forbidden patterns beyond the global standing rules.
+
+  validation:
+    type: list[validation_entry]
+    required: true
+    description: >
+      Checks that constitute empirical verification for this slice. Maestro
+      runs each (local checks now), captures output, reports. Bench checks are
+      marked deferred (see standing-rules §6).
+
+  validation_entry:
+    fields:
+      command:
+        type: string
+        description: Exact command (e.g. `python -m py_compile <file>`).
+      expected:
+        type: string
+        description: >
+          Human-readable expected outcome. For local checks: "compiles",
+          "valid JSON", "no output". For docs: "all citations locate", "16/16
+          checklist pass". For bench: "GREEN N/N (on staging)".
+      bench_required:
+        type: boolean
+        default: false
+        description: >
+          When true, the command needs a staging Frappe v15 bench and is NOT
+          run locally — Maestro marks it `⏳ BENCH-VALIDATION` deferred and
+          does not claim it passing until run on a real bench.
+
+  stop:
+    type: list[string]
+    required: true
+    description: >
+      Slice-specific stop conditions, in addition to the standing rules'
+      universal stops (e.g. "stop if a cited DP2 path does not resolve").
+
+  report_fields:
+    type: list[string]
+    required: true
+    description: >
+      Items the worker MUST include in its report. Standard set:
+      ["changed_files", "validation_results", "forbidden_path_check",
+      "confirmation_no_unauthorized_git_ops"]. Slice may extend.
+
+  parallel_safety:
+    type: enum
+    required: true
+    values: [safe, unsafe, unknown]
+    description: >
+      "safe" — no file overlap with other ready slices. "unsafe" — file
+      overlap (e.g. two slices editing the same mapping matrix file).
+      "unknown" — Maestro asks before scheduling alongside others.
+
+  branch_template:
+    type: string
+    required: false
+    default: "<type>/<spec_id_short>-<short_name>"
+    description: >
+      Branch name template. Variables: <type>, <spec_id_short> (e.g.
+      "003-data-pulse-auth"), <short_name> (lowercase-kebab from id).
+
+  worktree_template:
+    type: string
+    required: false
+    default: "C:\\Users\\user\\Documents\\GitHub\\connector-<short_name>"
+    description: Worktree path template.
+
+  predecessors_must_be_merged:
+    type: boolean
+    required: false
+    default: false
+    description: >
+      When true, depends_on slices must be `merged` on `main`, not just
+      `committed`/`pushed`. Use for follow-up specs that must not rebase
+      against unmerged work.
+
+  # --------------------------------------------------------------------------
+  # Audit fields — populated by the post-merge closeout workflow
+  # (see docs/agent-os/maestro-playbook.md "Workflow — post-merge closeout").
+  # All optional.
+  # --------------------------------------------------------------------------
+
+  merged_in_pr:
+    type: integer
+    required: false
+    description: GitHub PR number that landed this slice.
+
+  merged_at_commit:
+    type: string
+    required: false
+    description: Short SHA of the merge commit on `main`.
+
+  merged_at_date:
+    type: string
+    required: false
+    description: ISO YYYY-MM-DD merge date.
+
+  previously_blocked:
+    type: list[string]
+    required: false
+    description: >
+      Slice IDs moved here from `blocks:` at merge time. Preserves the
+      historical block record. Audit-only.
+
+# ----------------------------------------------------------------------------
+# Map-level fields — top-level of execution-map.yaml
+# ----------------------------------------------------------------------------
+
+map_schema:
+  spec:
+    type: string
+    required: true
+    description: Spec ID, e.g. "003-data-pulse-auth-and-api-policy".
+
+  version:
+    type: integer
+    required: true
+    description: Schema version of the map itself.
+
+  base:
+    type: string
+    required: false
+    default: origin/main
+    description: Branch all slices in this map are cut from.
+
+  findings:
+    type: list[finding_entry]
+    required: false
+    description: >
+      Discoveries made during slice execution that affect other slices.
+
+  finding_entry:
+    fields:
+      id:
+        type: string
+        description: ALL_CAPS_SNAKE_CASE identifier.
+      summary:
+        type: string
+      affected:
+        type: list[string]
+        description: Component / DocType / doc names.
+      severity:
+        type: enum
+        values: [critical, high, medium, low]
+      proof:
+        type: string
+        description: Commit SHA, file path, or other verifiable artifact.
+      blocks:
+        type: list[string]
+        description: Slice IDs that cannot proceed until this finding is resolved.
+      resolved_by:
+        type: string
+        description: Slice ID that closes the finding once merged.
+      resolved_by_pr:
+        type: integer
+        required: false
+      resolved_by_commit:
+        type: string
+        required: false
+      resolved_at:
+        type: string
+        required: false
+      previously_blocked:
+        type: list[string]
+        required: false
+
+  slices:
+    type: list[slice]
+    required: true
+    description: >
+      The slice list. Order is informational — execution order derives from
+      `depends_on` + `status`.
+
+  groups:
+    type: list[group_entry]
+    required: false
+    description: Optional named parallel groups.
+
+  group_entry:
+    fields:
+      id:
+        type: string
+      members:
+        type: list[string]
+      parallel_safety:
+        type: enum
+        values: [safe, unsafe, unknown]
+      proposed:
+        type: boolean
+        default: true

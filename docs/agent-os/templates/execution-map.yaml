@@ -1,0 +1,116 @@
+# execution-map.yaml — TEMPLATE
+#
+# Copy this file to `specs/<spec-id>/execution-map.yaml` and replace every
+# `<placeholder>` with real content. Fields follow the schema in
+# `docs/agent-os/slice-schema.yaml`.
+#
+# Maestro reads this file as the source of truth for slice state. Manual edits
+# are allowed (and expected) when the user wants to add a finding, reorder,
+# mark a slice closed, or propose a group. Slices reference Spec-Kit task IDs
+# from the spec's tasks.md.
+
+spec: <spec-id>                     # e.g. "003-data-pulse-auth-and-api-policy"
+version: 1
+base: origin/main                   # branch all slices are cut from
+
+# ----------------------------------------------------------------------------
+# findings — discoveries that affect slice scheduling
+# ----------------------------------------------------------------------------
+findings: []
+  # Example shape:
+  # - id: PHANTOM_DP2_CITATION
+  #   summary: >
+  #     A cited Data-Pulse-2 path does not resolve in the DP2 repo.
+  #   affected:
+  #     - docs/architecture/doctype-mapping-reference.md
+  #   severity: medium                # critical | high | medium | low
+  #   proof: <file-path-or-commit-sha>
+  #   blocks:
+  #     - SLICE_ID_THAT_CANT_PROCEED
+  #   resolved_by: SLICE_THAT_FIXES_IT
+  #   # Audit fields (populated at closeout):
+  #   # resolved_by_pr: <PR_NUMBER>
+  #   # resolved_by_commit: <short-sha>
+  #   # resolved_at: <YYYY-MM-DD>
+  #   # previously_blocked: [SLICE_ID_THAT_CANT_PROCEED]
+
+# ----------------------------------------------------------------------------
+# slices — the work items
+# ----------------------------------------------------------------------------
+slices:
+
+  # Example A — an ungated docs slice (the common connector case).
+  - id: <SLICE_ID_1>                # e.g. MAPPING_MATRIX_BUILD
+    task_ids: []                    # e.g. ["T004", "T005"]
+    type: docs                      # feat | fix | test | refactor | docs | chore | perf | ci
+    status: ready                   # proposed | blocked | ready | approved | in_progress | local_uncommitted | committed | pushed | in_review | merged | closed
+    approval_required: false        # docs under docs/** are ungated
+    depends_on: []
+    blocks: []
+    agent: docs-mapping             # see docs/agent-os/agent-profiles.yaml
+    allowed_files:
+      - docs/architecture/<doc>.md
+    forbidden_files: []
+    validation:
+      - command: python -c "import json; ..."   # only if the slice produces JSON
+        expected: valid
+        bench_required: false
+      - command: <citation-locates check>       # for DP2-citing docs
+        expected: all cited DP2 paths resolve
+        bench_required: false
+    stop:
+      - if a cited Data-Pulse-2 path does not resolve in the DP2 repo
+    report_fields:
+      - changed_files
+      - validation_results
+      - forbidden_path_check
+      - confirmation_no_unauthorized_git_ops
+    parallel_safety: safe
+    # branch_template: <override-if-needed>
+    # worktree_template: <override-if-needed>
+
+  # Example B — a GATED slice touching the Frappe app surface.
+  - id: <SLICE_ID_2>                # e.g. T012_CONNECTOR_SETTINGS_DOCTYPE
+    task_ids: []                    # e.g. ["T012", "T013"]
+    type: feat
+    status: blocked
+    approval_required: true         # touches DocType JSON / hooks.py (gated, §3)
+    depends_on:
+      - <SLICE_ID_1>
+    blocks: []
+    agent: frappe-app
+    allowed_files:
+      - retail_tower_erpnext_connector/<module>/doctype/<name>/<name>.json
+      - retail_tower_erpnext_connector/<module>/doctype/<name>/<name>.py
+    validation:
+      - command: python -c "import json; json.load(open('<json-path>'))"
+        expected: valid JSON
+        bench_required: false
+      - command: bench --site <staging> install-app retail_tower_erpnext_connector
+        expected: GREEN (on staging)
+        bench_required: true        # deferred — no local bench (standing-rules §6)
+    stop:
+      - if the DocType would carry business-mutation fields/hooks (Principle VII)
+      - if the change copies ERPNext/Frappe core (Principle II)
+    report_fields:
+      - changed_files
+      - validation_results
+      - forbidden_path_check
+      - confirmation_no_unauthorized_git_ops
+      - recommended_commit_message
+    parallel_safety: unsafe         # gated app-surface slices serialize
+    # Post-merge closeout audit fields — uncomment after the slice's PR merges:
+    # merged_in_pr: <PR_NUMBER>
+    # merged_at_commit: <short-sha>
+    # merged_at_date: <YYYY-MM-DD>
+    # previously_blocked: [<SLICE_ID_X>]
+
+# ----------------------------------------------------------------------------
+# groups — optional parallel waves
+# ----------------------------------------------------------------------------
+groups: []
+  # Example:
+  # - id: WAVE_X
+  #   members: [<SLICE_A>, <SLICE_B>]
+  #   parallel_safety: safe
+  #   proposed: true                  # awaiting user approval
