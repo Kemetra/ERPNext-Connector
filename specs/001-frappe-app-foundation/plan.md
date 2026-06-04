@@ -82,17 +82,19 @@ proportionality clause of the constitution's governance section.*
 ### Source Code (repository root)
 
 ```text
-retail_tower_erpnext_connector/        # the Frappe app package
+retail_tower_erpnext_connector/        # the importable Frappe app package
+├── __init__.py                        # __version__ = "0.1.0" (flit reads via dynamic)
 ├── hooks.py                           # app metadata + (empty) hook registrations
-├── modules.txt                        # declares the Connector module
-├── patches.txt                        # empty at foundation (no migrations)
-├── retail_tower_erpnext_connector/
+├── modules.txt                        # declares the "Connector" module
+├── patches.txt                        # section headers only (no migrations)
+├── connector/                         # the module folder (scrub of "Connector")
 │   └── doctype/
 │       └── connector_settings/        # the Single DocType placeholder
-│           ├── connector_settings.json
-│           └── connector_settings.py  # no business logic
+│           ├── __init__.py
+│           ├── connector_settings.json  # issingle:1, HTML placeholder note only
+│           └── connector_settings.py  # ConnectorSettings(Document), no business logic
 └── tests/
-    └── test_foundation.py             # install + singleton + no-mutation assertions
+    └── test_foundation.py             # install + singleton + no-mutation + no-fork assertions
 
 pyproject.toml                         # app packaging metadata + version pin
 docs/

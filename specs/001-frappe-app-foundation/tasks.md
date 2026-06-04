@@ -33,10 +33,10 @@ Single custom Frappe app at the repository root. App package:
 
 **Purpose**: Create the Frappe app package skeleton that everything else attaches to.
 
-- [ ] T001 Create app package directory structure per plan.md: `retail_tower_erpnext_connector/` with nested `retail_tower_erpnext_connector/doctype/`, and a top-level `tests/` and `docs/` (`docs/runbooks/`, `docs/decisions/`)
-- [ ] T002 Create `pyproject.toml` at repo root with app packaging metadata, SemVer version `0.1.0`, and the supported version pin (`frappe`, `erpnext` v15 line) per FR-007 and research.md Decision 2
-- [ ] T003 [P] Create `retail_tower_erpnext_connector/modules.txt` declaring the `Connector` module
-- [ ] T004 [P] Create empty `retail_tower_erpnext_connector/patches.txt` (no migrations at foundation, per data-model.md)
+- [X] T001 Create app package directory structure per plan.md: `retail_tower_erpnext_connector/` with nested `retail_tower_erpnext_connector/connector/doctype/`, and a top-level `tests/` and `docs/` (`docs/runbooks/`, `docs/decisions/`)
+- [X] T002 Create `pyproject.toml` at repo root with app packaging metadata, version dynamic from `__init__.py` (`0.1.0`), flit build backend per FR-007 and research.md Decision 2
+- [X] T003 [P] Create `retail_tower_erpnext_connector/modules.txt` declaring the `Connector` module
+- [X] T004 [P] Create empty `retail_tower_erpnext_connector/patches.txt` (section headers only; no migrations at foundation, per data-model.md)
 
 ---
 
@@ -46,8 +46,8 @@ Single custom Frappe app at the repository root. App package:
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T005 Create `retail_tower_erpnext_connector/hooks.py` with app metadata (`app_name`, `app_title` "Retail Tower ERPNext Connector", `app_publisher` "Retail Tower OS", `app_description`, `app_license` per repo LICENSE) per FR-002; register NO document-event hooks, scheduled jobs, or overrides (FR-005)
-- [ ] T006 [P] Create `retail_tower_erpnext_connector/__init__.py` exposing `__version__` consistent with `pyproject.toml`
+- [X] T005 Create `retail_tower_erpnext_connector/hooks.py` with app metadata (`app_name`, `app_title` "Retail Tower ERPNext Connector", `app_publisher` "Retail Tower OS", `app_description`, `app_email`, `app_license`) per FR-002; `required_apps = ["erpnext"]`; register NO document-event hooks, scheduled jobs, or overrides (FR-005)
+- [X] T006 [P] Create `retail_tower_erpnext_connector/__init__.py` exposing `__version__ = "0.1.0"` (flit reads it via `dynamic`)
 
 **Checkpoint**: App package is metadata-complete and installable as an empty app — user story implementation can now begin.
 
@@ -66,13 +66,13 @@ Single custom Frappe app at the repository root. App package:
 > execute on a staging ERPNext bench, not in this repo. Author them before T009/T010;
 > run them on the bench during T020.
 
-- [ ] T007 [US1] Write install + metadata test in `retail_tower_erpnext_connector/tests/test_foundation.py`: asserts the app is in the site's installed-apps list and that `hooks.py` exposes the required metadata fields (FR-001, FR-002)
-- [ ] T008 [US1] Write no-business-mutation + no-fork test in `retail_tower_erpnext_connector/tests/test_foundation.py`: asserts the app declares NO DocType that writes product/stock/price/sales data, registers NO document-event/scheduled hooks touching business data (FR-005), and embeds NO copied ERPNext/Frappe core modules (FR-006)
+- [X] T007 [US1] Write install + metadata test in `retail_tower_erpnext_connector/tests/test_foundation.py`: asserts the app is in the site's installed-apps list and that `hooks.py` exposes the required metadata fields (FR-001, FR-002)
+- [X] T008 [US1] Write no-business-mutation + no-fork test in `retail_tower_erpnext_connector/tests/test_foundation.py`: asserts the app declares NO DocType that writes product/stock/price/sales data, registers NO document-event/scheduled hooks touching business data (FR-005), and embeds NO copied ERPNext/Frappe core modules (FR-006)
 
 ### Implementation for User Story 1
 
-- [ ] T009 [US1] Verify `hooks.py` metadata renders correctly via `bench --site <staging> install-app retail_tower_erpnext_connector` on a staging site; confirm install succeeds and the app lists (FR-003, SC-001)
-- [ ] T010 [US1] Run `bench --site <staging> migrate` and confirm it is a no-op (empty `patches.txt`), then confirm the desk loads and ERPNext business data is unchanged (FR-010, SC-003)
+- [ ] T009 [US1] ⏳ BENCH-VALIDATION — Verify `hooks.py` metadata renders correctly via `bench --site <staging> install-app retail_tower_erpnext_connector` on a staging site; confirm install succeeds and the app lists (FR-003, SC-001)
+- [ ] T010 [US1] ⏳ BENCH-VALIDATION — Run `bench --site <staging> migrate` and confirm it is a no-op (empty `patches.txt`), then confirm the desk loads and ERPNext business data is unchanged (FR-010, SC-003)
 
 **Checkpoint**: User Story 1 is fully functional — the app installs and is inspectable. This is the MVP.
 
@@ -86,14 +86,14 @@ Single custom Frappe app at the repository root. App package:
 
 ### Tests for User Story 2 ⚠️
 
-- [ ] T011 [US2] Write singleton test in `retail_tower_erpnext_connector/tests/test_foundation.py`: asserts `Connector Settings` is a Single DocType and resolves to exactly one record (FR-004, research.md Decision 1) — bench-dependent, same file as T007/T008 so author sequentially
+- [X] T011 [US2] Write singleton test in `retail_tower_erpnext_connector/tests/test_foundation.py`: asserts `Connector Settings` is a Single DocType and resolves to exactly one record (FR-004, research.md Decision 1) — bench-dependent, same file as T007/T008 so author sequentially
 
 ### Implementation for User Story 2
 
-- [ ] T012 [US2] Create `retail_tower_erpnext_connector/retail_tower_erpnext_connector/doctype/connector_settings/connector_settings.json` defining `Connector Settings` as a **Single** DocType in the `Connector` module, with no functional fields (at most a non-functional placeholder note), System Manager read/write permissions only (data-model.md)
-- [ ] T013 [P] [US2] Create `retail_tower_erpnext_connector/retail_tower_erpnext_connector/doctype/connector_settings/connector_settings.py` with the controller class and NO business logic (data-model.md, FR-005)
-- [ ] T014 [P] [US2] Create the doctype `__init__.py` files so the DocType package imports cleanly
-- [ ] T015 [US2] Reinstall/migrate on staging and confirm exactly one Connector Settings record exists and opens, and a second install does not duplicate it (US2 acceptance, reinstall edge case). SC-002 (locate settings from docs) is validated via T017 + T021, not here.
+- [X] T012 [US2] Create `retail_tower_erpnext_connector/connector/doctype/connector_settings/connector_settings.json` defining `Connector Settings` as a **Single** DocType (`issingle: 1`) in the `Connector` module, with no functional fields, System Manager read/write permissions only (data-model.md)
+- [X] T013 [P] [US2] Create `retail_tower_erpnext_connector/connector/doctype/connector_settings/connector_settings.py` with the `ConnectorSettings(Document)` controller class and NO business logic (data-model.md, FR-005)
+- [X] T014 [P] [US2] Create the doctype `__init__.py` files (module, doctype, connector_settings) so the package imports cleanly
+- [ ] T015 [US2] ⏳ BENCH-VALIDATION — Reinstall/migrate on staging and confirm exactly one Connector Settings record exists and opens, and a second install does not duplicate it (US2 acceptance, reinstall edge case). SC-002 (locate settings from docs) is validated via T017 + T021, not here.
 
 **Checkpoint**: User Stories 1 AND 2 both work independently.
 
@@ -107,9 +107,9 @@ Single custom Frappe app at the repository root. App package:
 
 ### Implementation for User Story 3
 
-- [ ] T016 [P] [US3] Write `docs/decisions/version-pin-upgrade-policy.md`: the exact supported ERPNext/Frappe pin (v15 line), and the policy that compatibility is declared/documented not enforced at install (FR-007, research.md Decision 2)
-- [ ] T017 [P] [US3] Write `docs/runbooks/staging-install.md` as the canonical staging install guide (mirror `quickstart.md`); include the unsupported-version operator action (FR-009, edge case)
-- [ ] T018 [P] [US3] Write `docs/runbooks/upgrade-compatibility.md`: the upgrade sequence requiring staging validation + rehearsed backup/restore before any production change (FR-008, Constitution III)
+- [X] T016 [P] [US3] Write `docs/decisions/version-pin-upgrade-policy.md`: the exact supported ERPNext/Frappe pin (v15 line), and the policy that compatibility is declared/documented not enforced at install (FR-007, research.md Decision 2)
+- [X] T017 [P] [US3] Write `docs/runbooks/staging-install.md` as the canonical staging install guide (mirror `quickstart.md`); include the unsupported-version operator action (FR-009, edge case)
+- [X] T018 [P] [US3] Write `docs/runbooks/upgrade-compatibility.md`: the upgrade sequence requiring staging validation + rehearsed backup/restore before any production change (FR-008, Constitution III)
 
 **Checkpoint**: All three user stories are independently functional and documented.
 
@@ -119,9 +119,9 @@ Single custom Frappe app at the repository root. App package:
 
 **Purpose**: Repo-level consistency and final validation across stories.
 
-- [ ] T019 [P] Add app entry to repo `README.md` "Current Status" noting 001 foundation is implemented (keep README roadmap accurate)
-- [ ] T020 Run the full foundation test suite via `bench --site <staging> run-tests --app retail_tower_erpnext_connector` and confirm all tests pass
-- [ ] T021 Execute `quickstart.md` end-to-end on a clean staging site (install → verify table → uninstall) and confirm every SC-001..SC-005 checkpoint passes
+- [X] T019 [P] Add app entry to repo `README.md` "Current Status" noting 001 foundation is implemented (keep README roadmap accurate); add `.gitignore`
+- [ ] T020 ⏳ BENCH-VALIDATION — Run the full foundation test suite via `bench --site <staging> run-tests --app retail_tower_erpnext_connector` and confirm all tests pass
+- [ ] T021 ⏳ BENCH-VALIDATION — Execute `quickstart.md` end-to-end on a clean staging site (install → verify table → uninstall) and confirm every SC-001..SC-005 checkpoint passes
 
 ---
 

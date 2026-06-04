@@ -1,0 +1,39 @@
+{
+ "actions": [],
+ "creation": "2026-06-04 00:00:00.000000",
+ "description": "Placeholder for Retail Tower connector configuration. No active integration behavior at the foundation (spec 001); settings are added by later specs against reviewed contracts.",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "placeholder_note"
+ ],
+ "fields": [
+  {
+   "fieldname": "placeholder_note",
+   "fieldtype": "HTML",
+   "label": "Placeholder Note",
+   "options": "<div class=\"text-muted\">This is a configuration placeholder (spec 001 — Frappe App Foundation). No active integration is configured at the foundation layer. Connector settings fields are added by later specs (003+) against their reviewed contracts.</div>"
+  }
+ ],
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-06-04 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Connector",
+ "name": "Connector Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
