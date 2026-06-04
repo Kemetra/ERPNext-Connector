@@ -163,7 +163,8 @@ opening a new one. Documenting it here keeps 006 from re-litigating it.
 
 **Independent Test**: Reviewable as policy: the spec references `docs/decisions/mapping-uom.md`
 (Option A) for unit handling and states money is carried as exact-decimal + currency code, with an
-unmapped unit producing the same fail-closed unresolved outcome as an unmapped product (US3).
+unmapped unit producing the same fail-closed *outcome* as an unmapped product (`permanently_rejected`),
+differing only in `reason.category` (`validation` for UOM vs. `unmapped_item` for product) (US3).
 
 **Acceptance Scenarios**:
 

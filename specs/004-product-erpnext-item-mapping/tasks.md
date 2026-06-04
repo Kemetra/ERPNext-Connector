@@ -75,7 +75,7 @@ record, no `contracts/` (DP2 owns the contracts), no code.
 **Independent Test**: A reviewer can state that `suggested`/`retired`/double-confirmed mappings are treated as unresolved, and that the connector never calls the `cookieAuth` review surface.
 
 - [ ] T009 [US2] Write the **Confirmed-only invariant & lifecycle** section: only `state = confirmed`, `retired_at = null` resolves; `suggested`/`retired` route to unresolved (US3); the connector relies on the 1:1 active invariant (OQ-2) and treats two confirmed mappings as fail-closed (never pick one) (FR-003); cite item-map confirmed-only invariant (data-model §3) + lifecycle
-- [ ] T010 [US2] Add the **lifecycle ownership** rule: suggest/confirm/retire is a human Tenant-Admin action via `cookieAuth` (Retail-Tower-Console), explicitly NOT the `connectorBearer` machine scheme; the connector neither builds nor calls it, and invents no auto-match source (`AUTO_MATCH_NO_SOURCE`, OQ-8) — never creates/searches ERPNext Items (FR-004, FR-005, Principle I); cite item-map auth boundary
+- [ ] T010 [US2] Add the **lifecycle ownership** rule: suggest/confirm/retire is a human Tenant-Admin action via `cookieAuth` (Retail-Tower-Console), explicitly NOT the `connectorBearer` machine scheme; the connector neither builds nor calls it, and invents no auto-match source (`AUTO_MATCH_NO_SOURCE`, OQ-8) — never creates/searches ERPNext Items (FR-004, FR-005, SC-004, Principle I); cite item-map auth boundary
 
 **Checkpoint**: The invariant + ownership documented; US2 stands on the US1/US3 resolution base.
 
