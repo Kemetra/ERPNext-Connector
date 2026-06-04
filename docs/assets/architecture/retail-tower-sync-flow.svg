@@ -1,0 +1,240 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 760" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" role="img" aria-label="Retail Tower OS synchronization flow: POS-Pulse and Retail-Tower-Console synchronize through Data-Pulse-2, which is the contract boundary to the ERPNext Connector and ERPNext/Frappe.">
+  <title>Retail Tower OS — Synchronization Flow</title>
+
+  <defs>
+    <!-- Backdrop -->
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a0f24"/>
+      <stop offset="0.55" stop-color="#0d1330"/>
+      <stop offset="1" stop-color="#070a1c"/>
+    </linearGradient>
+    <radialGradient id="hubGlow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#38bdf8" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#38bdf8" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Card faces (top highlight -> deep base = 3D feel) -->
+    <linearGradient id="cardPOS" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e3a8a"/><stop offset="1" stop-color="#0b1c52"/>
+    </linearGradient>
+    <linearGradient id="cardCON" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0e7490"/><stop offset="1" stop-color="#063243"/>
+    </linearGradient>
+    <linearGradient id="cardDP" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7c3aed"/><stop offset="1" stop-color="#3b1283"/>
+    </linearGradient>
+    <linearGradient id="cardCONN" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#b45309"/><stop offset="1" stop-color="#5c2705"/>
+    </linearGradient>
+    <linearGradient id="cardERP" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0f766e"/><stop offset="1" stop-color="#052e2b"/>
+    </linearGradient>
+
+    <!-- 3D extrusion side -->
+    <linearGradient id="edgeShade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#000000" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.85"/>
+    </linearGradient>
+
+    <!-- Glyph chrome -->
+    <linearGradient id="chrome" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#cbd5e1" stop-opacity="0.7"/>
+    </linearGradient>
+
+    <linearGradient id="flowUp" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#fbbf24"/><stop offset="1" stop-color="#f97316"/>
+    </linearGradient>
+    <linearGradient id="flowDown" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#60a5fa"/>
+    </linearGradient>
+
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
+    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="3.2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <style>
+      .title  { fill:#f8fafc; font-weight:700; }
+      .sub    { fill:#94a3b8; font-weight:500; }
+      .nodeT  { fill:#f8fafc; font-weight:700; }
+      .nodeS  { fill:#cbd5e1; font-weight:500; }
+      .lane   { fill:#e2e8f0; font-weight:600; }
+      .pulse  { animation: pulse 3.2s ease-in-out infinite; transform-origin:center; }
+      .float  { animation: float 5s ease-in-out infinite; }
+      .float2 { animation: float 5s ease-in-out infinite; animation-delay:-2.5s; }
+      .ring   { animation: ring 3.2s ease-out infinite; transform-origin:852px 360px; }
+      @keyframes pulse { 0%,100%{opacity:.55} 50%{opacity:1} }
+      @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
+      @keyframes ring  { 0%{transform:scale(.6);opacity:.7} 100%{transform:scale(1.5);opacity:0} }
+      @media (prefers-reduced-motion: reduce){
+        .pulse,.float,.float2,.ring{animation:none}
+      }
+    </style>
+  </defs>
+
+  <rect width="1280" height="760" fill="url(#bg)"/>
+
+  <!-- faint grid -->
+  <g stroke="#1e293b" stroke-width="1" opacity="0.4">
+    <path d="M0 190 H1280 M0 530 H1280"/>
+    <path d="M320 0 V760 M740 0 V760 M1030 0 V760"/>
+  </g>
+
+  <!-- Header -->
+  <text x="64" y="64" class="title" font-size="34">Retail Tower OS — The ERPNext Connector</text>
+  <text x="64" y="96" class="sub" font-size="17">The connector is the only component that touches ERPNext. Data-Pulse-2 pulls postings through it; catalog flows back up.</text>
+
+  <!-- ============ CONNECTION PATHS ============ -->
+  <g fill="none" stroke-linecap="round">
+    <!-- reference paths (used by motion + drawn faintly) -->
+    <path id="pPOS"  d="M270 200 C360 200 360 300 460 322"/>
+    <path id="pCON"  d="M270 540 C360 540 360 408 460 388"/>
+    <path id="pSPINE1" d="M600 360 L740 360"/>
+    <path id="pSPINE2" d="M880 360 L1010 360"/>
+
+    <use href="#pPOS"  stroke="#334155" stroke-width="6"/>
+    <use href="#pCON"  stroke="#334155" stroke-width="6"/>
+    <use href="#pSPINE1" stroke="#334155" stroke-width="6"/>
+    <use href="#pSPINE2" stroke="#334155" stroke-width="6"/>
+  </g>
+
+  <!-- pulsing boundary ring on the hub -->
+  <circle class="ring" cx="852" cy="360" r="70" fill="none" stroke="#38bdf8" stroke-width="2.5"/>
+  <circle cx="852" cy="360" r="150" fill="url(#hubGlow)"/>
+
+  <!-- ============ FLOW PACKETS ============ -->
+  <!-- Capture-UP (sales / inventory): POS & Console -> DP2 -> Connector -> ERPNext (amber) -->
+  <g filter="url(#glow)">
+    <circle r="6" fill="url(#flowUp)">
+      <animateMotion dur="3.4s" repeatCount="indefinite" rotate="auto"><mpath href="#pPOS"/></animateMotion>
+    </circle>
+    <circle r="6" fill="url(#flowUp)">
+      <animateMotion dur="3.4s" begin="-1.7s" repeatCount="indefinite"><mpath href="#pCON"/></animateMotion>
+    </circle>
+    <circle r="6.5" fill="url(#flowUp)">
+      <animateMotion dur="2.4s" repeatCount="indefinite"><mpath href="#pSPINE1"/></animateMotion>
+    </circle>
+    <circle r="6.5" fill="url(#flowUp)">
+      <animateMotion dur="2.4s" begin="-1.2s" repeatCount="indefinite"><mpath href="#pSPINE2"/></animateMotion>
+    </circle>
+  </g>
+
+  <!-- Read-DOWN (catalog / product master): ERPNext -> Connector -> DP2 -> POS & Console (cyan) -->
+  <g filter="url(#glow)">
+    <circle r="6.5" fill="url(#flowDown)">
+      <animateMotion dur="2.4s" begin="-0.6s" repeatCount="indefinite" keyPoints="1;0" keyTimes="0;1" calcMode="linear"><mpath href="#pSPINE2"/></animateMotion>
+    </circle>
+    <circle r="6.5" fill="url(#flowDown)">
+      <animateMotion dur="2.4s" begin="-1.8s" repeatCount="indefinite" keyPoints="1;0" keyTimes="0;1" calcMode="linear"><mpath href="#pSPINE1"/></animateMotion>
+    </circle>
+    <circle r="6" fill="url(#flowDown)">
+      <animateMotion dur="3.4s" begin="-2.4s" repeatCount="indefinite" keyPoints="1;0" keyTimes="0;1" calcMode="linear"><mpath href="#pPOS"/></animateMotion>
+    </circle>
+    <circle r="6" fill="url(#flowDown)">
+      <animateMotion dur="3.4s" begin="-0.8s" repeatCount="indefinite" keyPoints="1;0" keyTimes="0;1" calcMode="linear"><mpath href="#pCON"/></animateMotion>
+    </circle>
+  </g>
+
+  <!-- ============ NODE: POS-Pulse ============ -->
+  <g class="float">
+    <rect x="62" y="150" width="208" height="104" rx="18" fill="url(#edgeShade)" transform="translate(0,9)"/>
+    <rect x="62" y="150" width="208" height="104" rx="18" fill="url(#cardPOS)" filter="url(#soft)"/>
+    <rect x="62" y="150" width="208" height="40" rx="18" fill="#ffffff" opacity="0.10"/>
+    <!-- glyph: POS terminal -->
+    <g transform="translate(86,176)" fill="url(#chrome)">
+      <rect x="0" y="0" width="44" height="30" rx="4" fill="#0b1c52" stroke="url(#chrome)" stroke-width="2"/>
+      <rect x="5" y="5" width="34" height="14" rx="1.5" fill="#60a5fa" opacity="0.85"/>
+      <rect x="12" y="34" width="20" height="5" rx="2"/>
+      <rect x="6" y="41" width="32" height="4" rx="2"/>
+    </g>
+    <text x="146" y="186" class="nodeT" font-size="19">POS-Pulse</text>
+    <text x="146" y="210" class="nodeS" font-size="13">Windows retail terminal</text>
+    <text x="146" y="230" class="nodeS" font-size="12" opacity="0.8">offline-first · sale outbox</text>
+  </g>
+
+  <!-- ============ NODE: Console ============ -->
+  <g class="float2">
+    <rect x="62" y="490" width="208" height="104" rx="18" fill="url(#edgeShade)" transform="translate(0,9)"/>
+    <rect x="62" y="490" width="208" height="104" rx="18" fill="url(#cardCON)" filter="url(#soft)"/>
+    <rect x="62" y="490" width="208" height="40" rx="18" fill="#ffffff" opacity="0.10"/>
+    <!-- glyph: dashboard -->
+    <g transform="translate(86,516)" fill="url(#chrome)">
+      <rect x="0" y="0" width="44" height="40" rx="4" fill="#063243" stroke="url(#chrome)" stroke-width="2"/>
+      <rect x="6" y="22" width="6" height="12" rx="1.5"/>
+      <rect x="16" y="14" width="6" height="20" rx="1.5"/>
+      <rect x="26" y="18" width="6" height="16" rx="1.5"/>
+      <rect x="36" y="9" width="4" height="25" rx="1.5" opacity="0.7"/>
+    </g>
+    <text x="146" y="526" class="nodeT" font-size="19">Console</text>
+    <text x="146" y="550" class="nodeS" font-size="13">Admin web console</text>
+    <text x="146" y="570" class="nodeS" font-size="12" opacity="0.8">tenant · catalog · sync ops</text>
+  </g>
+
+  <!-- ============ NODE: Data-Pulse-2 (HUB) ============ -->
+  <g class="pulse" opacity="1">
+    <rect x="420" y="288" width="220" height="144" rx="22" fill="url(#edgeShade)" transform="translate(0,11)"/>
+    <rect x="420" y="288" width="220" height="144" rx="22" fill="url(#cardDP)" filter="url(#soft)"/>
+    <rect x="420" y="288" width="220" height="48" rx="22" fill="#ffffff" opacity="0.12"/>
+    <!-- glyph: database stack -->
+    <g transform="translate(450,322)" fill="url(#chrome)">
+      <ellipse cx="22" cy="6"  rx="22" ry="7" fill="#3b1283" stroke="url(#chrome)" stroke-width="2"/>
+      <path d="M0 6 V40 a22 7 0 0 0 44 0 V6" fill="#5b21b6" stroke="url(#chrome)" stroke-width="2"/>
+      <ellipse cx="22" cy="22" rx="22" ry="7" fill="none" stroke="url(#chrome)" stroke-width="1.6" opacity="0.7"/>
+      <ellipse cx="22" cy="6"  rx="22" ry="7" fill="#7c3aed"/>
+    </g>
+    <text x="510" y="332" class="nodeT" font-size="20">Data-Pulse-2</text>
+    <text x="510" y="356" class="nodeS" font-size="13">Backend · contract boundary</text>
+    <text x="510" y="376" class="nodeS" font-size="12" opacity="0.85">OpenAPI · RLS · outbox</text>
+    <text x="510" y="408" font-size="11" fill="#38bdf8" font-weight="700">◆ SINGLE SOURCE OF TRUTH</text>
+  </g>
+
+  <!-- ============ NODE: Connector ============ -->
+  <g class="float">
+    <rect x="762" y="300" width="180" height="120" rx="18" fill="url(#edgeShade)" transform="translate(0,9)"/>
+    <rect x="762" y="300" width="180" height="120" rx="18" fill="url(#cardCONN)" filter="url(#soft)"/>
+    <rect x="762" y="300" width="180" height="40" rx="18" fill="#ffffff" opacity="0.10"/>
+    <!-- glyph: plug / connector -->
+    <g transform="translate(784,332)" fill="url(#chrome)">
+      <rect x="0" y="14" width="20" height="16" rx="3"/>
+      <rect x="-7" y="18" width="9" height="3.5" rx="1.5"/>
+      <rect x="-7" y="23" width="9" height="3.5" rx="1.5"/>
+      <rect x="20" y="20" width="12" height="4" rx="2"/>
+      <path d="M32 12 h10 a8 8 0 0 1 8 8 v4 a8 8 0 0 1 -8 8 h-10 z" fill="#5c2705" stroke="url(#chrome)" stroke-width="2"/>
+    </g>
+    <text x="852" y="346" class="nodeT" font-size="17">Connector</text>
+    <text x="852" y="368" class="nodeS" font-size="12">Frappe / ERPNext app</text>
+    <text x="852" y="386" class="nodeS" font-size="11" opacity="0.8">contract-first adapter</text>
+  </g>
+
+  <!-- ============ NODE: ERPNext ============ -->
+  <g class="float2">
+    <rect x="1032" y="300" width="184" height="120" rx="18" fill="url(#edgeShade)" transform="translate(0,9)"/>
+    <rect x="1032" y="300" width="184" height="120" rx="18" fill="url(#cardERP)" filter="url(#soft)"/>
+    <rect x="1032" y="300" width="184" height="40" rx="18" fill="#ffffff" opacity="0.10"/>
+    <!-- glyph: ERP building -->
+    <g transform="translate(1056,330)" fill="url(#chrome)">
+      <path d="M2 12 L22 2 L42 12 Z" fill="#0f766e" stroke="url(#chrome)" stroke-width="2"/>
+      <rect x="4" y="12" width="36" height="26" fill="#052e2b" stroke="url(#chrome)" stroke-width="2"/>
+      <rect x="9" y="18" width="6" height="20"/><rect x="19" y="18" width="6" height="20"/><rect x="29" y="18" width="6" height="20"/>
+    </g>
+    <text x="1124" y="346" class="nodeT" font-size="17">ERPNext</text>
+    <text x="1124" y="368" class="nodeS" font-size="12">Frappe ledger</text>
+    <text x="1124" y="386" class="nodeS" font-size="11" opacity="0.8">system of record</text>
+  </g>
+
+  <!-- ============ LEGEND ============ -->
+  <g transform="translate(64,672)">
+    <text x="0" y="-12" class="lane" font-size="13" letter-spacing="0.5">DATA FLOW</text>
+    <circle cx="8" cy="14" r="6" fill="url(#flowUp)" filter="url(#glow)"/>
+    <text x="24" y="19" class="nodeS" font-size="14">Capture-UP — sales &amp; inventory rise toward ERPNext</text>
+    <circle cx="8" cy="42" r="6" fill="url(#flowDown)" filter="url(#glow)"/>
+    <text x="24" y="47" class="nodeS" font-size="14">Read-DOWN — catalog &amp; product master flow to the edge</text>
+  </g>
+
+  <!-- direction caption on spine -->
+  <text x="670" y="334" class="nodeS" font-size="11" text-anchor="middle" opacity="0.85">contract boundary</text>
+</svg>
