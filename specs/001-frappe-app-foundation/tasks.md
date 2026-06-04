@@ -121,7 +121,7 @@ Single custom Frappe app at the repository root. App package:
 
 - [X] T019 [P] Add app entry to repo `README.md` "Current Status" noting 001 foundation is implemented (keep README roadmap accurate); add `.gitignore`
 - [X] T020 ✅ PASS (local dev, 2026-06-04) — `bench --site retail.localhost run-tests --app retail_tower_erpnext_connector`: Ran 8 tests in 0.046s, OK. See [bench-validation.md](./bench-validation.md).
-- [ ] T021 ⏳ BENCH-VALIDATION (PENDING) — Execute `quickstart.md` end-to-end on a clean site (install → verify table → **uninstall**) and confirm every SC-001..SC-005 checkpoint passes. The uninstall/reinstall data-safety flow has NOT yet been run; install/migrate/tests passed (see [bench-validation.md](./bench-validation.md)) but the full end-to-end remains pending.
+- [X] T021 ✅ PASS (local dev, 2026-06-04) — `quickstart.md` executed end-to-end on `retail.localhost` (install → verify table → **uninstall**); ERPNext product/stock/sales data confirmed unchanged after uninstall (FR-010, SC-003), and SC-001..SC-005 checkpoints pass. See [bench-validation.md](./bench-validation.md).
 
 ---
 
