@@ -1,7 +1,7 @@
 # Decision: Customer Mapping (ERPNext Customer for Retail Tower sales)
 
-**Spec**: 002 — DocType Mapping Reference | **Status**: 🔴 OPEN | **Date raised**: 2026-06-04
-**Blocks**: spec 006 (sales posting)
+**Spec**: 002 — DocType Mapping Reference | **Status**: 🟢 SIGNED (Option A) | **Date raised**: 2026-06-04 | **Signed**: 2026-06-04
+**Blocks**: spec 006 (sales posting) — *unblocked by sign-off below*
 
 ## Question
 
@@ -36,5 +36,7 @@ connector treats Customer as ERPNext-owned configuration. This keeps DP2 unchang
 
 ## Sign-off
 
-- [ ] **Decision signed** — by: ________________  date: __________
-- Until signed, spec 006 MUST NOT implement Customer handling for posting.
+- [x] **Decision signed** — Option A (configured default walk-in Customer, ERPNext-owned, connector-referenced) — by: Ahmed Shaaban  date: 2026-06-04
+- Spec 006 may now implement Customer handling per Option A: posting references a default
+  walk-in Customer configured per ERPNext site/POS Profile; no customer identity flows from
+  DP2; the connector treats Customer as ERPNext-owned configuration.

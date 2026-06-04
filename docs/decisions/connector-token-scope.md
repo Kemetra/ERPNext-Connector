@@ -1,7 +1,7 @@
 # Decision: DP2 Connector Token Scope
 
-**Spec**: 003 — Data-Pulse Auth & API Policy | **Status**: OPEN | **Date raised**: 2026-06-04
-**Blocks**: SC-001 (staging authentication)
+**Spec**: 003 — Data-Pulse Auth & API Policy | **Status**: 🟢 SIGNED (Option A) — awaiting DP2 delivery | **Date raised**: 2026-06-04 | **Signed**: 2026-06-04
+**Blocks**: SC-001 (staging authentication) — *direction decided; remains blocked until DP2 ships the scope (see sign-off)*
 
 ## Question
 
@@ -77,6 +77,10 @@ Until DP2 provisions this scope and issues the connector its token, staging auth
 
 ## Sign-off
 
-- [ ] **Decision signed** — by: ________________  date: __________
-- Until signed, SC-001 (staging authentication) MUST NOT be treated as unblocked, and
-  connector token provisioning MUST NOT proceed with a substitute scope.
+- [x] **Decision signed** — Option A (DP2 provisions a new dedicated connector/machine scope; no reuse of an existing scope) — by: Ahmed Shaaban  date: 2026-06-04
+- The *direction* is decided: the connector MUST be issued a token under a dedicated DP2
+  scope, and MUST NOT reuse `dashboard_api`/`pos`/`pos_operator` as a workaround.
+- **SC-001 (staging authentication) remains blocked on DP2 delivery** — signing this decision
+  does not itself provision the scope. The connector team requests the new scope from the DP2
+  team; SC-001 unblocks only once DP2 ships it and issues the connector its token. This is now
+  a DP2-side delivery dependency, not an open connector decision.

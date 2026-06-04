@@ -1,7 +1,7 @@
 # Decision: UOM Mapping (ERPNext UOM ↔ Retail Tower unit)
 
-**Spec**: 002 — DocType Mapping Reference | **Status**: 🔴 OPEN | **Date raised**: 2026-06-04
-**Blocks**: spec 004 (product export), spec 006 (sales posting)
+**Spec**: 002 — DocType Mapping Reference | **Status**: 🟢 SIGNED (Option A) | **Date raised**: 2026-06-04 | **Signed**: 2026-06-04
+**Blocks**: spec 004 (product export), spec 006 (sales posting) — *unblocked by sign-off below*
 
 ## Question
 
@@ -38,5 +38,7 @@ for the *value*, keeps ERPNext authoritative for the *UOM master*, and never sil
 
 ## Sign-off
 
-- [ ] **Decision signed** — by: ________________  date: __________
-- Until signed, specs 004 and 006 MUST NOT implement unit handling.
+- [x] **Decision signed** — Option A (connector-side unit→ERPNext-UOM map; unmapped units fail closed) — by: Ahmed Shaaban  date: 2026-06-04
+- Specs 004 and 006 may now implement unit handling per Option A: a maintained connector-side
+  unit→UOM mapping with explicit `unmapped` failure (no silent guess). DP2 keeps free-text
+  units; ERPNext owns the UOM master.

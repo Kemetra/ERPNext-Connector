@@ -48,12 +48,12 @@ Each row records:
 | **Warehouse** | `stores` table (store / branch) | DP2 | Resolved | `packages/db/src/schema/stores.ts` |
 | **Item** | `tenant_products` (with `global_products`, `store_product_overrides`) | DP2 owns the product record; ERPNext owns Item identity for posting | Resolved | `packages/db/src/schema/catalog/tenant-products.ts` |
 | **Item Barcode** | `product_aliases` where `identifier_type = 'barcode'` | DP2 | Resolved | `packages/db/src/schema/catalog/product-aliases.ts` |
-| **UOM** | free-text `unit` (sale lines) / `stocking_unit` (inventory) — **no UOM master entity** | DP2 (as free text); reconciliation with ERPNext UOM undecided | **Decision needed** → [`mapping-uom.md`](../decisions/mapping-uom.md) | `packages/db/src/schema/sales/sale-lines.ts`, `packages/db/src/schema/inventory/stock-movements.ts` |
+| **UOM** | free-text `unit` (sale lines) / `stocking_unit` (inventory) — **no UOM master entity** | DP2 (free text); connector maps unit→ERPNext UOM (Option A, signed) | **Signed** → [`mapping-uom.md`](../decisions/mapping-uom.md) (connector-side unit→UOM map, unmapped fails closed) | `packages/db/src/schema/sales/sale-lines.ts`, `packages/db/src/schema/inventory/stock-movements.ts` |
 | **Price List** | `price_history` (interval-versioned) + `default_price` on `tenant_products` — **no Price List entity** | DP2 amounts are authoritative; ERPNext Price List is a document-validity reference only | Resolved (reference only) | `packages/db/src/schema/catalog/price-history.ts` |
 | **POS Invoice / Sales Invoice** | `sales` (immutable header) + `sale_lines` (frozen snapshots) | DP2 owns the sale fact; ERPNext owns the posted accounting document | Resolved | `packages/db/src/schema/sales/sales.ts`, `packages/db/src/schema/sales/sale-lines.ts` |
 | **Payment Entry / Mode of Payment** | not modeled as a DP2 table; `sales.pos_total` is the sale total, **not** tender | ERPNext (tender not modeled in DP2) | **Deferred → 006** (sales posting / tender) | `packages/db/src/schema/sales/sales.ts` (no tender columns — Payment Entry absent from DP2 schema; the only tender-adjacent surface is the POS voucher contract `packages/contracts/openapi/pos-payments/vouchers.yaml`) |
 | **Return Invoice / Refund** | `sale_refunds` + `sale_voids` (append-only terminal events; never mutate the sale) | DP2 | Resolved | `packages/db/src/schema/sales/sale-terminal-events.ts` |
-| **Customer** | not modeled in DP2 (walk-in retail) | ERPNext-owned; connector default (if any) is a decision | **Decision needed / Deferred → 006** → [`mapping-customer.md`](../decisions/mapping-customer.md) | (absent in DP2 — confirmed by survey; no schema file) |
+| **Customer** | not modeled in DP2 (walk-in retail) | ERPNext-owned; default walk-in Customer per POS Profile (Option A, signed) | **Signed → 006** → [`mapping-customer.md`](../decisions/mapping-customer.md) (configured default walk-in Customer) | (absent in DP2 — confirmed by survey; no schema file) |
 
 ### Product → ERPNext Item correlation (concept level)
 
@@ -110,8 +110,8 @@ never from request bodies. This aligns with the connector foundation's site-scop
 
 | Concept | Status | Blocks |
 |---------|--------|--------|
-| UOM | Decision needed | spec 004 (product export), spec 006 (sales posting) — until [`mapping-uom.md`](../decisions/mapping-uom.md) is signed |
-| Customer | Decision needed / Deferred | spec 006 (sales posting) — until [`mapping-customer.md`](../decisions/mapping-customer.md) is signed |
+| UOM | ✅ Signed (Option A, 2026-06-04) | Was blocking specs 004 & 006 — now **unblocked**: connector-side unit→UOM map, unmapped fails closed. See [`mapping-uom.md`](../decisions/mapping-uom.md). |
+| Customer | ✅ Signed (Option A, 2026-06-04) | Was blocking spec 006 — now **unblocked**: configured default walk-in Customer (ERPNext-owned). See [`mapping-customer.md`](../decisions/mapping-customer.md). |
 | Payment Entry | Deferred → 006 | (no decision record; owned by spec 006) |
 
 > **Note**: "Customer" is included as a concept surfaced by the Data-Pulse-2 survey (DP2 has

@@ -373,9 +373,11 @@ Next work item:
 004-product-and-price-export
 
 Do not implement catalog, inventory, sales posting, or tax mutation before the relevant
-connector contract is reviewed (constitution Principle VII). **Gates before 004+:** the open
-mapping decisions (UOM, Customer) and the connector-token-scope decision MUST be signed; the
-003 auth policy (G4) is in place.
+connector contract is reviewed (constitution Principle VII). **Gate status before 004+:** the
+003 auth policy (G4) is in place; the UOM, Customer, and connector-token-scope decisions are
+**signed** (all Option A, 2026-06-04). Remaining dependency: DP2 must still *provision* the
+connector token scope before staging authentication (SC-001) — the decision is signed, the
+delivery is pending.
 
 ---
 
