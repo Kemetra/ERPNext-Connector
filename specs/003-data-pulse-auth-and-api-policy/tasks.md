@@ -34,8 +34,8 @@ dependency decision at `docs/decisions/connector-token-scope.md`. Per plan.md. N
 
 **Purpose**: Create the policy document location and skeleton.
 
-- [ ] T001 Ensure `docs/decisions/` exists (created in spec 002); create the skeleton `docs/decisions/data-pulse-auth-and-api-policy.md` with title, status, purpose, and section headers: Direction, Authentication, Idempotency & dedup, Error taxonomy, Secrets & correlation, Sources & precedence
-- [ ] T002 In the skeleton, add the "Sources & precedence" section stating Data-Pulse-2 is authoritative (cite, don't redefine — FR-012, Principle I), code/contracts over prose, and that the connector authenticates TO DP2 (HTTP client; cite research.md Decision 1)
+- [X] T001 Ensure `docs/decisions/` exists (created in spec 002); create the skeleton `docs/decisions/data-pulse-auth-and-api-policy.md` with title, status, purpose, and section headers: Direction, Authentication, Idempotency & dedup, Error taxonomy, Secrets & correlation, Sources & precedence
+- [X] T002 In the skeleton, add the "Sources & precedence" section stating Data-Pulse-2 is authoritative (cite, don't redefine — FR-012, Principle I), code/contracts over prose, and that the connector authenticates TO DP2 (HTTP client; cite research.md Decision 1)
 
 ---
 
@@ -45,7 +45,7 @@ dependency decision at `docs/decisions/connector-token-scope.md`. Per plan.md. N
 
 **⚠️ CRITICAL**: The auth section (US1) references a connector token scope that does not yet exist in DP2 — record it as a gated dependency first.
 
-- [ ] T003 Write `docs/decisions/connector-token-scope.md`: question (which DP2 token scope authenticates the connector machine principal, given DP2 has only `dashboard_api`/`pos` today), options, recommendation, **Sign-off** line (open), `Blocks: SC-001 (staging authentication)` (research.md Decision 3 gap #2)
+- [X] T003 Write `docs/decisions/connector-token-scope.md`: question (which DP2 token scope authenticates the connector machine principal, given DP2 has only `dashboard_api`/`pos` today), options, recommendation, **Sign-off** line (open), `Blocks: SC-001 (staging authentication)` (research.md Decision 3 gap #2)
 
 **Checkpoint**: The token-scope dependency is recorded; the auth policy can reference it honestly.
 
@@ -57,8 +57,8 @@ dependency decision at `docs/decisions/connector-token-scope.md`. Per plan.md. N
 
 **Independent Test**: A reviewer can state the auth direction, principal type, token type, and how tenant/store scope is derived, from the Authentication section alone.
 
-- [ ] T004 [US1] Write the **Direction** section in `docs/decisions/data-pulse-auth-and-api-policy.md`: the connector is the HTTP client (pull/ack); DP2 makes no inbound calls; cite the pull/ack endpoints in `posting-feed.yaml` (FR-003)
-- [ ] T005 [US1] Write the **Authentication** section: tenant-scoped machine principal, opaque revocable bearer token (`connectorBearer`), scope derived from the principal not the body (FR-001, FR-002); cite the DP2 token machinery (`packages/auth/src/tokens.ts`, `auth-token.repository.ts`, `tenant-context.guard.ts`) and link the token-scope dependency (T003)
+- [X] T004 [US1] Write the **Direction** section in `docs/decisions/data-pulse-auth-and-api-policy.md`: the connector is the HTTP client (pull/ack); DP2 makes no inbound calls; cite the pull/ack endpoints in `posting-feed.yaml` (FR-003)
+- [X] T005 [US1] Write the **Authentication** section: tenant-scoped machine principal, opaque revocable bearer token (`connectorBearer`), scope derived from the principal not the body (FR-001, FR-002); cite the DP2 token machinery (`packages/auth/src/tokens.ts`, `auth-token.repository.ts`, `tenant-context.guard.ts`) and link the token-scope dependency (T003)
 
 **Checkpoint**: Auth direction + model documented (MVP — the secure-channel definition stands on its own).
 
@@ -70,9 +70,9 @@ dependency decision at `docs/decisions/connector-token-scope.md`. Per plan.md. N
 
 **Independent Test**: A reviewer can state the idempotency key, the dedup identity, the outcome taxonomy, and the retry policy, from the Idempotency + Error sections.
 
-- [ ] T006 [US2] Write the **Idempotency & dedup** section: required idempotency key on ack (replay vs 409 conflict); wire dedup `sourceSystem + externalId`; client-side idempotency so a re-pulled work item does not create a duplicate ERPNext document (FR-005, FR-006, Principle IV); cite `posting-feed.yaml` + O-3
-- [ ] T007 [US2] Write the **Error taxonomy** section: outcome enum (`posted`/`failed_transient`/`permanently_rejected`), rejection categories (`validation`/`closed_period`/`unmapped_item`/`unmapped_account`/`other`), and client-side bounded-backoff retry for transient / no blind retry for permanent (FR-010); cite `posting-feed.yaml`
-- [ ] T008 [US2] Add the **posted-outcome** rule: ERPNext document reference returned generically as `{doctype, name}` (FR-004, Principle II); cite `ErpnextDocumentRef`
+- [X] T006 [US2] Write the **Idempotency & dedup** section: required idempotency key on ack (replay vs 409 conflict); wire dedup `sourceSystem + externalId`; client-side idempotency so a re-pulled work item does not create a duplicate ERPNext document (FR-005, FR-006, Principle IV); cite `posting-feed.yaml` + O-3
+- [X] T007 [US2] Write the **Error taxonomy** section: outcome enum (`posted`/`failed_transient`/`permanently_rejected`), rejection categories (`validation`/`closed_period`/`unmapped_item`/`unmapped_account`/`other`), and client-side bounded-backoff retry for transient / no blind retry for permanent (FR-010); cite `posting-feed.yaml`
+- [X] T008 [US2] Add the **posted-outcome** rule: ERPNext document reference returned generically as `{doctype, name}` (FR-004, Principle II); cite `ErpnextDocumentRef`
 
 **Checkpoint**: Replay-safety + taxonomy documented; US1 + US2 both stand independently.
 
@@ -84,8 +84,8 @@ dependency decision at `docs/decisions/connector-token-scope.md`. Per plan.md. N
 
 **Independent Test**: A reviewer can state the token-never-in-logs/UI rule and the correlation-id rule, from the Secrets & correlation section.
 
-- [ ] T009 [US3] Write the **Secrets & correlation** section: token stored securely, never retrievable in plaintext from logs/errors/UI (FR-007, FR-008, gate G4); the connector logs the DP2 server-side `request_id` for correlation, and invents no wire correlation field (FR-009, research.md Decision 3 gap #1); cite DP2 redaction discipline + `correlation.ts`
-- [ ] T010 [US3] Add the **revoked-token** operator behavior: refused calls are non-disclosing; the connector surfaces a clear re-authenticate state without exposing the token (edge case)
+- [X] T009 [US3] Write the **Secrets & correlation** section: token stored securely, never retrievable in plaintext from logs/errors/UI (FR-007, FR-008, gate G4); the connector logs the DP2 server-side `request_id` for correlation, and invents no wire correlation field (FR-009, research.md Decision 3 gap #1); cite DP2 redaction discipline + `correlation.ts`
+- [X] T010 [US3] Add the **revoked-token** operator behavior: refused calls are non-disclosing; the connector surfaces a clear re-authenticate state without exposing the token (edge case)
 
 **Checkpoint**: G4 secrets gate + correlation documented; all three stories complete.
 
@@ -95,9 +95,9 @@ dependency decision at `docs/decisions/connector-token-scope.md`. Per plan.md. N
 
 **Purpose**: Final consistency, citation verification, reviewer-readiness.
 
-- [ ] T011 Verify every DP2 citation in the policy resolves in the Data-Pulse-2 repo (`C:\Users\user\Documents\GitHub\Data-Pulse-2`) and confirms the claim; fix any that does not resolve (FR-012, SC-005)
-- [ ] T012 [P] Update `README.md` "Current Status" to note spec 003 auth policy is drafted and point to `docs/decisions/data-pulse-auth-and-api-policy.md`; mention specs 004+ are gated on it (G4)
-- [ ] T013 Run the quickstart verification checklist end-to-end against the finished policy (direction, auth, idempotency, taxonomy, secrets, correlation, citations locate, token-scope dependency recorded) and confirm SC-002..SC-006 pass; SC-001 marked deferred (staging + DP2 token scope)
+- [X] T011 Verify every DP2 citation in the policy resolves in the Data-Pulse-2 repo (`C:\Users\user\Documents\GitHub\Data-Pulse-2`) and confirms the claim; fix any that does not resolve (FR-012, SC-005)
+- [X] T012 [P] Update `README.md` "Current Status" to note spec 003 auth policy is drafted and point to `docs/decisions/data-pulse-auth-and-api-policy.md`; mention specs 004+ are gated on it (G4)
+- [X] T013 Run the quickstart verification checklist end-to-end against the finished policy (direction, auth, idempotency, taxonomy, secrets, correlation, citations locate, token-scope dependency recorded) and confirm SC-002..SC-006 pass; SC-001 marked deferred (staging + DP2 token scope)
 
 ---
 
