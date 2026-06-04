@@ -342,13 +342,24 @@ Exit criteria:
 
 ## Current Status
 
-Initial planning repository.
+**Spec 001 — Frappe App Foundation: implemented.** The custom Frappe app
+`retail_tower_erpnext_connector` is scaffolded with app metadata, a `Connector Settings`
+Single DocType placeholder, foundation tests, and install/version-pin/upgrade documentation.
+No product, stock, price, or sales mutation exists, and ERPNext is not forked.
 
-Recommended first work item:
+Built via spec-driven development (`.specify/`): see the constitution at
+`.specify/memory/constitution.md` and the 001 artifacts under
+`specs/001-frappe-app-foundation/` (spec → plan → tasks → analyze).
 
-001-frappe-app-foundation
+Staging install: see `docs/runbooks/staging-install.md`. Bench-validation steps (install,
+verify, `run-tests`) run on a staging ERPNext v15 bench.
 
-Do not implement catalog, inventory, sales posting, or tax mutation before the foundation and connector contract are reviewed.
+Next work item:
+
+002-doctype-mapping-reference
+
+Do not implement catalog, inventory, sales posting, or tax mutation before the relevant
+connector contract is reviewed (constitution Principle VII).
 
 ---
 

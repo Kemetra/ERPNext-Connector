@@ -1,0 +1,16 @@
+.DS_Store
+*.pyc
+*.egg-info
+*.swp
+tags
+node_modules
+__pycache__
+.venv/
+venv/
+dist/
+build/
+*.log
+.env*
+.idea/
+.vscode/
+Thumbs.db
