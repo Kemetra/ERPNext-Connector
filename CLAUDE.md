@@ -30,16 +30,19 @@ governs when in doubt. Profiles: see [docs/agent-os/agent-profiles.yaml](docs/ag
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/003-data-pulse-auth-and-api-policy/plan.md`
+`specs/004-product-erpnext-item-mapping/plan.md`
 
-Active feature: 003 Data-Pulse Auth & API Policy (docs/policy only; the connector
-authenticates TO Data-Pulse-2 as a tenant-scoped machine principal and is the HTTP
-client — pull/ack; CITES DP2's posting-feed.yaml contract + token machinery, does NOT
-re-derive; idempotent ack + no-duplicate posting (IV); no secrets in logs + correlation
-id (V, gate G4); NO connector code — see `.specify/memory/constitution.md`).
+Active feature: 004 Product–ERPNext Item Mapping (docs/policy only; **reframed** from the
+README's "catalog export from ERPNext" — no such DP2 contract exists, reverse direction barred
+by G4). The connector resolves a posting work-item sale line's `tenantProductRef` to a confirmed
+ERPNext Item via DP2's `erpnext_item_map` (spec 013, migration 0017); CITES `erpnext-item-map.yaml`
++ `posting-feed.yaml`, does NOT export catalog or re-derive DP2. Spine = fail-closed unresolved
+surfacing (Principle VI): unresolved product → `permanently_rejected`/`unmapped_item`, unmapped UOM
+→ `validation`; ad-hoc line fails closed (signed). NO connector code — resolution lands in spec 006.
+See `.specify/memory/constitution.md`.
 
 Done: 001 Frappe App Foundation (implemented + validated), 002 DocType Mapping Reference
-(merged). Their plans are under `specs/00{1,2}-*/plan.md`.
+(merged), 003 Data-Pulse Auth & API Policy (merged). Their plans are under `specs/00{1,2,3}-*/plan.md`.
 
 Data-Pulse-2 backend repo (authoritative reference, read-only):
 `C:\Users\user\Documents\GitHub\Data-Pulse-2`.
