@@ -79,3 +79,14 @@ spec 006.
 ## Open items
 
 None. All Technical Context is resolved; no `NEEDS CLARIFICATION` remains.
+
+## Correction (implementation phase, 2026-06-04)
+
+During implementation, a citation-verification pass against the DP2 repo found that the
+DP2 **spec directories 011/013** referenced above (e.g. "DP2 013 OQ-3", "DP2 013 §4",
+"specs 011/013") **do not yet exist** — they are future/claimed identifiers noted in DP2's
+`docs/ROADMAP-ERP.md` erratum, not created spec files. The mapping reference therefore cites
+only DP2 **code and contracts** (Drizzle schema + OpenAPI) as authoritative; the 011/013
+mentions here are retained as the original survey's framing but are NOT used as primary
+citations in the delivered matrix. The structural facts they described (UOM free-text /
+Price List reference-only) are confirmed directly from the DP2 schema and stand.

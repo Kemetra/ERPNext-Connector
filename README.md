@@ -354,12 +354,19 @@ Built via spec-driven development (`.specify/`): see the constitution at
 Staging install: see `docs/runbooks/staging-install.md`. Bench-validation steps (install,
 verify, `run-tests`) run on a staging ERPNext v15 bench.
 
+**Spec 002 — DocType Mapping Reference: drafted.** The ERPNext ↔ Retail Tower mapping matrix
+is at [`docs/architecture/doctype-mapping-reference.md`](docs/architecture/doctype-mapping-reference.md).
+It cites Data-Pulse-2 as authoritative for the Retail Tower side (it does not re-derive the
+mapping) and records ambiguous mappings as decision records under `docs/decisions/`
+(`mapping-uom.md`, `mapping-customer.md`) with open sign-offs that gate later specs.
+
 Next work item:
 
-002-doctype-mapping-reference
+003-data-pulse-auth-and-api-policy
 
 Do not implement catalog, inventory, sales posting, or tax mutation before the relevant
-connector contract is reviewed (constitution Principle VII).
+connector contract is reviewed (constitution Principle VII). Open mapping decisions
+(UOM, Customer) MUST be signed before specs 004/006 implement those concepts.
 
 ---
 

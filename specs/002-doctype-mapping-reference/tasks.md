@@ -32,8 +32,8 @@ records under `docs/decisions/`. Per plan.md "Structure Decision". No code.
 
 **Purpose**: Create the documentation locations.
 
-- [ ] T001 Ensure `docs/architecture/` and `docs/decisions/` directories exist (per README layout; `docs/decisions/` may already exist from spec 001)
-- [ ] T002 Create the skeleton `docs/architecture/doctype-mapping-reference.md` with title, purpose, a "How to read this matrix" preamble (column meanings from data-model.md), and an empty matrix table header (ERPNext concept | Retail Tower counterpart | Owner of truth | Status | DP2 source citation)
+- [X] T001 Ensure `docs/architecture/` and `docs/decisions/` directories exist (per README layout; `docs/decisions/` may already exist from spec 001)
+- [X] T002 Create the skeleton `docs/architecture/doctype-mapping-reference.md` with title, purpose, a "How to read this matrix" preamble (column meanings from data-model.md), and an empty matrix table header (ERPNext concept | Retail Tower counterpart | Owner of truth | Status | DP2 source citation)
 
 ---
 
@@ -43,7 +43,7 @@ records under `docs/decisions/`. Per plan.md "Structure Decision". No code.
 
 **⚠️ CRITICAL**: The matrix rows (US1) cannot be trusted until the citation policy is fixed.
 
-- [ ] T003 In `docs/architecture/doctype-mapping-reference.md`, add a "Sources & precedence" section stating Data-Pulse-2 is authoritative for the Retail Tower side (FR-003), that code/contracts outrank prose (spec Assumption), and that ERPNext is addressed only via generic `{doctype, name}` (FR-004) — citing research.md Decision 1 & 3
+- [X] T003 In `docs/architecture/doctype-mapping-reference.md`, add a "Sources & precedence" section stating Data-Pulse-2 is authoritative for the Retail Tower side (FR-003), that code/contracts outrank prose (spec Assumption), and that ERPNext is addressed only via generic `{doctype, name}` (FR-004) — citing research.md Decision 1 & 3
 
 **Checkpoint**: Citation policy fixed — matrix rows can now be written with confidence.
 
@@ -55,12 +55,12 @@ records under `docs/decisions/`. Per plan.md "Structure Decision". No code.
 
 **Independent Test**: A reviewer reads the matrix and can state the RT counterpart, owner, and status for each of Company, Warehouse, Item, Barcode, UOM, Price List, Sale/Invoice, Payment, Return.
 
-- [ ] T004 [US1] Add matrix rows for the **identity & structure** concepts in `docs/architecture/doctype-mapping-reference.md`: Company→`tenants` (`schema/tenants.ts`); Warehouse→`stores` (`schema/stores.ts`). Owner of truth + status (Resolved) per research.md Decision 1
-- [ ] T005 [US1] Add matrix rows for the **catalog** concepts: Item→`tenant_products` (`schema/catalog/tenant-products.ts`); Item Barcode→`product_aliases` (`schema/catalog/product-aliases.ts`); Price List→`price_history`/`default_price` (`schema/catalog/price-history.ts`, status Resolved — reference only)
-- [ ] T006 [US1] Add the **UOM** matrix row: free-text `unit`/`stocking_unit`, no DP2 master (`schema/sales/sale-lines.ts`, `schema/inventory/stock-movements.ts`), status **Decision needed** linking to `docs/decisions/mapping-uom.md`
-- [ ] T007 [US1] Add matrix rows for the **sales** concepts: POS/Sales Invoice→`sales`+`sale_lines` (`schema/sales/sales.ts`, `sale-lines.ts`); Return/Refund→`sale_refunds`+`sale_voids` (`schema/sales/sale-terminal-events.ts`); Payment Entry→not modeled (`pos-payments/vouchers.yaml`), status **Deferred to 006**
-- [ ] T008 [US1] Add the **Product→Item correlation** row and prose: `erpnext_item_map` (`schema/catalog/erpnext-item-map.ts`, migration `0017_erpnext_item_map.sql`), confirmed-state semantics, 1:1 active invariant — concept level only (FR-009, FR-010)
-- [ ] T009 [US1] Add the **Customer** row: not modeled in DP2 (walk-in retail), owner = ERPNext, status **Deferred / ERPNext-owned**; note any connector default is a decision (FR-006)
+- [X] T004 [US1] Add matrix rows for the **identity & structure** concepts in `docs/architecture/doctype-mapping-reference.md`: Company→`tenants` (`schema/tenants.ts`); Warehouse→`stores` (`schema/stores.ts`). Owner of truth + status (Resolved) per research.md Decision 1
+- [X] T005 [US1] Add matrix rows for the **catalog** concepts: Item→`tenant_products` (`schema/catalog/tenant-products.ts`); Item Barcode→`product_aliases` (`schema/catalog/product-aliases.ts`); Price List→`price_history`/`default_price` (`schema/catalog/price-history.ts`, status Resolved — reference only)
+- [X] T006 [US1] Add the **UOM** matrix row: free-text `unit`/`stocking_unit`, no DP2 master (`schema/sales/sale-lines.ts`, `schema/inventory/stock-movements.ts`), status **Decision needed** linking to `docs/decisions/mapping-uom.md`
+- [X] T007 [US1] Add matrix rows for the **sales** concepts: POS/Sales Invoice→`sales`+`sale_lines` (`schema/sales/sales.ts`, `sale-lines.ts`); Return/Refund→`sale_refunds`+`sale_voids` (`schema/sales/sale-terminal-events.ts`); Payment Entry→not modeled (`pos-payments/vouchers.yaml`), status **Deferred to 006**
+- [X] T008 [US1] Add the **Product→Item correlation** row and prose: `erpnext_item_map` (`schema/catalog/erpnext-item-map.ts`, migration `0017_erpnext_item_map.sql`), confirmed-state semantics, 1:1 active invariant — concept level only (FR-009, FR-010)
+- [X] T009 [US1] Add the **Customer** row: not modeled in DP2 (walk-in retail), owner = ERPNext, status **Deferred / ERPNext-owned**; note any connector default is a decision (FR-006)
 
 **Checkpoint**: All listed concepts present as rows with status (SC-001). MVP — the matrix is reviewable on its own.
 
@@ -72,9 +72,9 @@ records under `docs/decisions/`. Per plan.md "Structure Decision". No code.
 
 **Independent Test**: For each row, the cited DP2 path can be opened and confirms the counterpart; ERPNext addressing is generic only.
 
-- [ ] T010 [US2] Verify every matrix row's DP2 citation is a real, locatable path in the Data-Pulse-2 repo (`C:\Users\user\Documents\GitHub\Data-Pulse-2`) and confirms the named counterpart; fix any citation that does not resolve (SC-004)
-- [ ] T011 [US2] Audit the matrix for ERPNext field-level names; confirm ERPNext documents are addressed only via `{doctype, name}` (FR-004); add the `ErpnextDocumentRef` citation (`posting-feed.yaml`)
-- [ ] T012 [US2] Add a "Superseded sources" note recording that DP2's `docs/ROADMAP-ERP.md` is stale and that schema/contracts are authoritative where prose diverges (FR-007)
+- [X] T010 [US2] Verify every matrix row's DP2 citation is a real, locatable path in the Data-Pulse-2 repo (`C:\Users\user\Documents\GitHub\Data-Pulse-2`) and confirms the named counterpart; fix any citation that does not resolve (SC-004)
+- [X] T011 [US2] Audit the matrix for ERPNext field-level names; confirm ERPNext documents are addressed only via `{doctype, name}` (FR-004); add the `ErpnextDocumentRef` citation (`posting-feed.yaml`)
+- [X] T012 [US2] Add a "Superseded sources" note recording that DP2's `docs/ROADMAP-ERP.md` is stale and that schema/contracts are authoritative where prose diverges (FR-007)
 
 **Checkpoint**: Matrix is fully DP2-sourced and version-independent.
 
@@ -86,9 +86,9 @@ records under `docs/decisions/`. Per plan.md "Structure Decision". No code.
 
 **Independent Test**: Each "Decision needed" row has a record; a planner can tell which decisions are signed vs blocking which spec.
 
-- [ ] T013 [P] [US3] Write `docs/decisions/mapping-uom.md`: question (how the connector reconciles DP2 free-text units with ERPNext UOM, given no DP2 UOM master — DP2 013 OQ-3), options, recommendation, **Sign-off** line (open), and `Blocks: 004/006` (FR-005, SC-003)
-- [ ] T014 [P] [US3] Write `docs/decisions/mapping-customer.md`: question (does posting need a connector default Customer, or is it ERPNext-owned for walk-in retail), options, **Sign-off** line (open), `Blocks: 006` (FR-005)
-- [ ] T015 [US3] In the matrix, confirm every `Deferred` concept (Payment, Customer, tax) names its owning later spec (FR-006); cross-link each `Decision needed` row to its decision record
+- [X] T013 [P] [US3] Write `docs/decisions/mapping-uom.md`: question (how the connector reconciles DP2 free-text units with ERPNext UOM, given no DP2 UOM master — DP2 013 OQ-3), options, recommendation, **Sign-off** line (open), and `Blocks: 004/006` (FR-005, SC-003)
+- [X] T014 [P] [US3] Write `docs/decisions/mapping-customer.md`: question (does posting need a connector default Customer, or is it ERPNext-owned for walk-in retail), options, **Sign-off** line (open), `Blocks: 006` (FR-005)
+- [X] T015 [US3] In the matrix, confirm every `Deferred` concept (Payment, Customer, tax) names its owning later spec (FR-006); cross-link each `Decision needed` row to its decision record
 
 **Checkpoint**: All ambiguous mappings are recorded as decisions; downstream gating is explicit.
 
@@ -98,8 +98,8 @@ records under `docs/decisions/`. Per plan.md "Structure Decision". No code.
 
 **Purpose**: Final consistency and reviewer-readiness.
 
-- [ ] T016 [P] Update `README.md` "Current Status" to note spec 002 mapping reference is drafted and point to `docs/architecture/doctype-mapping-reference.md`
-- [ ] T017 Run the quickstart verification checklist end-to-end against the finished reference (all concepts present, citations locate, decisions have sign-off, deferrals name owner) and confirm SC-001..SC-005 pass
+- [X] T016 [P] Update `README.md` "Current Status" to note spec 002 mapping reference is drafted and point to `docs/architecture/doctype-mapping-reference.md`
+- [X] T017 Run the quickstart verification checklist end-to-end against the finished reference (all concepts present, citations locate, decisions have sign-off, deferrals name owner) and confirm SC-001..SC-005 pass
 
 ---
 
