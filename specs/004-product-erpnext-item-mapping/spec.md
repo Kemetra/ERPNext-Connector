@@ -48,6 +48,13 @@ Principles I, VI, VII and quality gate G1.
   via the dashboard session), explicitly **not** the `connectorBearer` machine scheme. The
   connector neither builds nor calls that review UI; it consumes the *confirmed* mapping's effect
   at posting time. This keeps Principle I intact (DP2 is the only orchestration boundary).
+- Q: How should the connector handle an ad-hoc sale line (`tenantProductRef == null`) — fail closed
+  or post against a configured fallback Item? → A: **Fail closed (Option A, signed 2026-06-04).** An
+  ad-hoc line is reported `permanently_rejected` with `reason.category = unmapped_item`, identical to
+  any other unresolved product — no configured catch-all/"miscellaneous" Item. Rationale: Principle
+  VI (surface, never silently absorb); a catch-all Item would distort ERPNext item-level reporting
+  and could mask a real catalog gap. A fallback Item remains a *future* explicit signed opt-in if a
+  concrete POS ad-hoc-line need appears; it is not the default. FR-012 is no longer an open decision.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -171,9 +178,9 @@ unmapped unit producing the same fail-closed unresolved outcome as an unmapped p
 ### Edge Cases
 
 - **Ad-hoc line (`tenantProductRef == null`)**: `posting-feed.yaml` allows null for ad-hoc lines.
-  The policy MUST state explicitly whether an ad-hoc line is (a) routed to the unresolved path, or
-  (b) posted against a configured fallback/"miscellaneous" Item — and if (b), the fallback MUST be
-  an explicit, configured decision, never an implicit guess. *(Candidate decision record.)*
+  **Signed policy (Clarifications, 2026-06-04): fail closed** — an ad-hoc line is reported
+  `permanently_rejected` / `unmapped_item`, never posted against a catch-all Item. A configured
+  fallback Item is a possible *future* signed opt-in, not the default.
 - **More than one active mapping for a product**: DP2 enforces at most one active mapping per
   `tenant_product_id` (OQ-2 1:1, `409 conflict` on a second active suggestion). The connector
   relies on this invariant; if it ever observes two confirmed mappings it MUST treat the state as
@@ -241,10 +248,12 @@ unmapped unit producing the same fail-closed unresolved outcome as an unmapped p
 - **FR-011**: An unresolved or resolution-error outcome MUST be traceable end-to-end via the
   spec-003 correlation policy (DP2 `request_id`) and MUST NOT expose secrets, tokens, or
   credentials in logs, errors, or UI (Gate G4 / Principle V).
-- **FR-012**: The connector MUST decide the **ad-hoc line policy** explicitly (route to unresolved
-  vs. configured fallback Item). The default is fail-closed (route to unresolved); any fallback
-  MUST be a configured, signed decision — never an implicit guess. *(Recorded as a candidate
-  decision; see Assumptions/Dependencies.)*
+- **FR-012**: An ad-hoc sale line (`tenantProductRef == null`) MUST **fail closed** — reported
+  `permanently_rejected` / `unmapped_item`, identical to any unresolved product. The connector MUST
+  NOT post an ad-hoc line against a catch-all/"miscellaneous" Item. *(Signed 2026-06-04, Option A —
+  see Clarifications.)* A configured fallback Item is a possible future signed opt-in, not the
+  default; if ever introduced it MUST be an explicit, configured, signed decision (never an
+  implicit guess).
 - **FR-013**: Every DP2 reference in this spec and its decision records MUST cite a real path in
   the Data-Pulse-2 repository (verified to locate and confirm the claim); the connector MUST NOT
   re-derive DP2's model (Principle I, `dp2-citation-verification`).
@@ -282,8 +291,9 @@ unmapped unit producing the same fail-closed unresolved outcome as an unmapped p
 - **SC-004**: A reviewer confirms the connector neither calls DP2's tenant-admin review surface
   (`cookieAuth`) nor creates/searches ERPNext Items — i.e. no catalog-import or item-search path
   appears anywhere in the spec (Principle I/II, `AUTO_MATCH_NO_SOURCE`, OQ-8).
-- **SC-005**: The ad-hoc line policy is explicit and signed (fail-closed default; any fallback Item
-  recorded as a signed decision) before spec 006 (sales posting) implements line resolution.
+- **SC-005**: The ad-hoc line policy is explicit and **signed** (2026-06-04: fail-closed —
+  `permanently_rejected` / `unmapped_item`, no catch-all Item) before spec 006 (sales posting)
+  implements line resolution. ✅ Signed (see Clarifications / FR-012).
 - **SC-006** *(deferred — bench)*: On a staging ERPNext v15 site, a posting work-item with a
   confirmed mapping resolves to its Item, and a work-item with no confirmed mapping acks
   `permanently_rejected` / `unmapped_item` — idempotent on a DP2 re-offer. Marked
@@ -320,5 +330,5 @@ unmapped unit producing the same fail-closed unresolved outcome as an unmapped p
 - **Signed UOM decision** (`docs/decisions/mapping-uom.md`, Option A) — input to FR-008.
 - **Spec 003 policy** (auth, idempotency, error taxonomy, correlation, secrets) — substrate for
   FR-007/FR-010/FR-011.
-- **Candidate decision: ad-hoc line policy** (FR-012) — must be signed before spec 006 line
-  resolution.
+- **Ad-hoc line policy** (FR-012) — ✅ signed 2026-06-04 (fail closed; no catch-all Item). No
+  longer an open decision blocking spec 006.
