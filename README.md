@@ -20,6 +20,26 @@ This connector keeps ERPNext integration isolated, versioned, testable, and upgr
 
 ---
 
+## 🔗 Synchronization — the only path to ERPNext
+
+The connector is the **only** component allowed to touch ERPNext. It pulls sale postings from
+Data-Pulse-2's posting feed (capture-UP), resolves each line to a confirmed ERPNext Item, posts,
+and acks the outcome. It never forks ERPNext, copies its core, or exports catalog out of ERPNext
+(reverse direction barred by G4).
+
+<p align="center">
+  <img src="docs/assets/architecture/retail-tower-sync-flow.svg" alt="Animated Retail Tower OS synchronization diagram, connector focus" width="100%"/>
+</p>
+
+```text
+Data-Pulse-2  ──▶  Retail Tower ERPNext Connector  ──▶  ERPNext / Frappe
+```
+
+Full detail (posting flow + sequence): [docs/architecture/synchronization.md](docs/architecture/synchronization.md) ·
+Program control plane: [Retail-Tower-Orchestrator](https://github.com/ahmed-shaaban-94/Retail-Tower-Orchestrator).
+
+---
+
 ## Repository Role
 
 This repository owns the custom Frappe app:
