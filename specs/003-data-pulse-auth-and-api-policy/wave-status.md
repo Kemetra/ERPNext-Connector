@@ -3,20 +3,21 @@
 > Human-readable summary of where the spec stands. Mirrors and condenses
 > `execution-map.yaml`. Maestro updates both together when a slice lands.
 
-**Last updated:** `2026-06-04` by `maestro`
+**Last updated:** `2026-06-04` by `maestro` (post-merge closeout of PR #8)
 **Spec:** `003-data-pulse-auth-and-api-policy` (`specs/003-data-pulse-auth-and-api-policy/`)
-**Base:** `origin/main` at `42d7a89` (Agent OS merged)
+**Base:** `origin/main` at `e3d2668` (PR #8 merged)
 **Active finding(s):** `0` — see [Active findings](#active-findings)
 
 ---
 
 ## TL;DR
 
-Spec 003 planning chain (spec → clarify → plan → tasks) is committed on the feature branch
-and the Agent OS execution map is seeded with 6 docs slices. **Implementation has not
-started** — paused before implement per the user. Two slices are `ready`
-(`POLICY_SKELETON`, `TOKEN_SCOPE_DEPENDENCY`); the rest are dependency-blocked on them.
-All slices are docs-only (no gated surfaces). Next move: dispatch `POLICY_SKELETON`.
+Spec 003 is **complete and merged**. All 6 docs slices landed on `main` via **PR #8**
+(merge commit `e3d2668`, 2026-06-04) — the policy doc + the connector-token-scope decision
+record were authored end-to-end by an Agent OS workflow (Sonnet authors, Opus review) and
+merged together. Nothing is blocked or pending dispatch. **One external dependency remains:**
+SC-001 (staging authentication) is blocked on Data-Pulse-2 *delivering* the connector token
+scope — the decision is signed (Option A), but DP2 must ship the scope.
 
 ---
 
@@ -24,18 +25,21 @@ All slices are docs-only (no gated surfaces). Next move: dispatch `POLICY_SKELET
 
 | Slice ID | Subject | Commit / PR |
 |---|---|---|
-| _None — implementation not started._ | | |
+| `POLICY_SKELETON` | Policy skeleton + Sources & precedence (T001–T002) | PR #8 / `e3d2668` |
+| `TOKEN_SCOPE_DEPENDENCY` | Connector-token-scope decision record (T003) | PR #8 / `e3d2668` |
+| `AUTH_DIRECTION_AND_MODEL` | Direction + Authentication (T004–T005) | PR #8 / `e3d2668` |
+| `IDEMPOTENCY_AND_TAXONOMY` | Idempotency + error taxonomy + doc ref (T006–T008) | PR #8 / `e3d2668` |
+| `SECRETS_AND_CORRELATION` | Secrets (G4) + correlation (T009–T010) | PR #8 / `e3d2668` |
+| `POLISH_AND_VERIFY` | Citation verify + README + quickstart (T011–T013) | PR #8 / `e3d2668` |
 
-(The spec/plan/tasks planning artifacts are committed on the feature branch
-`003-data-pulse-auth-and-api-policy`, not yet PR'd.)
+(All 6 slices merged together via the combined spec-003 PR. The implementation was authored
+in one Agent OS workflow pass rather than dispatched slice-by-slice.)
 
 ---
 
 ## Local only — committed/uncommitted, not on `main`
 
-| Slice ID | Branch | Commit | Notes |
-|---|---|---|---|
-| (planning artifacts) | `003-data-pulse-auth-and-api-policy` | spec/plan/tasks commits | spec→tasks committed; no implementation slices run yet |
+_None._
 
 ---
 
@@ -47,39 +51,32 @@ _None._
 
 ## Blocked
 
-| Slice ID | Blocked by | Notes |
-|---|---|---|
-| `AUTH_DIRECTION_AND_MODEL` | `POLICY_SKELETON`, `TOKEN_SCOPE_DEPENDENCY` | needs skeleton + token-scope dependency recorded first |
-| `IDEMPOTENCY_AND_TAXONOMY` | `AUTH_DIRECTION_AND_MODEL` | same policy file; auth defined before idempotency |
-| `SECRETS_AND_CORRELATION` | `AUTH_DIRECTION_AND_MODEL` | same policy file; token defined before its storage rules |
-| `POLISH_AND_VERIFY` | `IDEMPOTENCY_AND_TAXONOMY`, `SECRETS_AND_CORRELATION` | citation verify + README + quickstart after all sections |
+_None._ (All slices merged.)
+
+> **External dependency (not a slice block):** SC-001 (staging authentication) awaits
+> Data-Pulse-2 *provisioning* the connector token scope. The decision is signed (Option A,
+> see `docs/decisions/connector-token-scope.md`); this is a DP2-side delivery, tracked outside
+> this spec's slice graph.
 
 ---
 
 ## Ready / approved — next to dispatch
 
-| Slice ID | Type | Agent | Approval needed? | Notes |
-|---|---|---|---|---|
-| `POLICY_SKELETON` | docs | docs-mapping | no | skeleton + Sources & precedence (T001–T002) |
-| `TOKEN_SCOPE_DEPENDENCY` | docs | docs-mapping | no | DP2 connector-token-scope decision record (T003); separate file, parallel-safe |
+_None._ (Spec 003 is fully merged.)
 
 ---
 
 ## Proposed (awaiting approval)
 
-_None._ (No parallel groups proposed; the policy-file slices serialize.)
+_None._
 
 ---
 
 ## Next recommended action
 
-Dispatch `POLICY_SKELETON` (the MVP path's first slice). `TOKEN_SCOPE_DEPENDENCY` is also
-ready and edits a separate file, so the two could run as a parallel pair if the user approves
-a wave — otherwise run `POLICY_SKELETON` first, then `TOKEN_SCOPE_DEPENDENCY`, then the
-blocked auth/idempotency/secrets slices unblock in order.
-
-**Note:** SC-001 (staging authentication) is deferred — it needs a staging environment AND
-Data-Pulse-2 to provision a connector token scope (the `TOKEN_SCOPE_DEPENDENCY` decision).
+Spec 003 is closed out. Next roadmap item is **spec 004 (Product & Price Export)** — now
+unblocked on the mapping-decision front (UOM + Customer signed). Note spec 004 will exercise
+the signed UOM decision (connector-side unit→ERPNext-UOM map).
 
 ---
 
@@ -104,6 +101,8 @@ Stop before commit.
 
 ## Next short Maestro prompt
 
+Spec 003 is fully merged — no slice to dispatch. To begin the next spec:
+
 ```text
-Use Agent OS. Execute slice POLICY_SKELETON. Stop before commit.
+Use Agent OS. Begin spec 004 (Product & Price Export).
 ```

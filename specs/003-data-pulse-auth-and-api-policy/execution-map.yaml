@@ -18,10 +18,14 @@ slices:
   - id: POLICY_SKELETON
     task_ids: ["T001", "T002"]
     type: docs
-    status: ready
+    status: merged
+    merged_in_pr: 8
+    merged_at_commit: e3d2668
+    merged_at_date: 2026-06-04
     approval_required: false
     depends_on: []
-    blocks: ["AUTH_DIRECTION_AND_MODEL", "IDEMPOTENCY_AND_TAXONOMY", "SECRETS_AND_CORRELATION"]
+    blocks: []
+    previously_blocked: ["AUTH_DIRECTION_AND_MODEL", "IDEMPOTENCY_AND_TAXONOMY", "SECRETS_AND_CORRELATION"]
     agent: docs-mapping
     allowed_files:
       - docs/decisions/data-pulse-auth-and-api-policy.md
@@ -37,10 +41,14 @@ slices:
   - id: TOKEN_SCOPE_DEPENDENCY
     task_ids: ["T003"]
     type: docs
-    status: ready
+    status: merged
+    merged_in_pr: 8
+    merged_at_commit: e3d2668
+    merged_at_date: 2026-06-04
     approval_required: false
     depends_on: []
-    blocks: ["AUTH_DIRECTION_AND_MODEL"]
+    blocks: []
+    previously_blocked: ["AUTH_DIRECTION_AND_MODEL"]
     agent: docs-mapping
     allowed_files:
       - docs/decisions/connector-token-scope.md
@@ -56,10 +64,14 @@ slices:
   - id: AUTH_DIRECTION_AND_MODEL
     task_ids: ["T004", "T005"]
     type: docs
-    status: blocked
+    status: merged
+    merged_in_pr: 8
+    merged_at_commit: e3d2668
+    merged_at_date: 2026-06-04
     approval_required: false
-    depends_on: ["POLICY_SKELETON", "TOKEN_SCOPE_DEPENDENCY"]
-    blocks: ["IDEMPOTENCY_AND_TAXONOMY", "SECRETS_AND_CORRELATION"]
+    depends_on: []
+    blocks: []
+    previously_blocked: ["IDEMPOTENCY_AND_TAXONOMY", "SECRETS_AND_CORRELATION"]
     agent: docs-mapping
     allowed_files:
       - docs/decisions/data-pulse-auth-and-api-policy.md
@@ -75,9 +87,12 @@ slices:
   - id: IDEMPOTENCY_AND_TAXONOMY
     task_ids: ["T006", "T007", "T008"]
     type: docs
-    status: blocked
+    status: merged
+    merged_in_pr: 8
+    merged_at_commit: e3d2668
+    merged_at_date: 2026-06-04
     approval_required: false
-    depends_on: ["AUTH_DIRECTION_AND_MODEL"]
+    depends_on: []
     blocks: []
     agent: docs-mapping
     allowed_files:
@@ -94,9 +109,12 @@ slices:
   - id: SECRETS_AND_CORRELATION
     task_ids: ["T009", "T010"]
     type: docs
-    status: blocked
+    status: merged
+    merged_in_pr: 8
+    merged_at_commit: e3d2668
+    merged_at_date: 2026-06-04
     approval_required: false
-    depends_on: ["AUTH_DIRECTION_AND_MODEL"]
+    depends_on: []
     blocks: []
     agent: docs-mapping
     allowed_files:
@@ -113,9 +131,12 @@ slices:
   - id: POLISH_AND_VERIFY
     task_ids: ["T011", "T012", "T013"]
     type: docs
-    status: blocked
+    status: merged
+    merged_in_pr: 8
+    merged_at_commit: e3d2668
+    merged_at_date: 2026-06-04
     approval_required: false
-    depends_on: ["IDEMPOTENCY_AND_TAXONOMY", "SECRETS_AND_CORRELATION"]
+    depends_on: []
     blocks: []
     agent: docs-mapping
     allowed_files:
