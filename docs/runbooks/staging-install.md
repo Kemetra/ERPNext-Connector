@@ -63,6 +63,21 @@ bench --site <staging-site> uninstall-app retail_tower_erpnext_connector
 stock, and sales data are **unchanged** (FR-010 / SC-003) — the app introduced no business
 mutations to reverse.
 
+## Validation result (local Docker Frappe v15 dev)
+
+On **2026-06-04**, install / migrate / tests were validated on a local Docker Frappe dev
+site (`retail.localhost`, Frappe 15.110.0, ERPNext 15.110.0, connector 0.1.0):
+
+- `install-app` — **PASS**
+- `migrate` — **PASS** (no-op)
+- `run-tests` — **PASS** (8 tests, OK)
+- `list-apps` — connector listed at 0.1.0
+
+**Caveat**: this was local dev validation; Frappe warned MariaDB 11.8 is newer than its
+tested range — not a production/staging DB recommendation. The full quickstart end-to-end
+(including the uninstall safety check below) is **not yet run**. Full record:
+[`specs/001-frappe-app-foundation/bench-validation.md`](../../specs/001-frappe-app-foundation/bench-validation.md).
+
 ## Out of scope (later specs)
 
 Data-Pulse-2 authentication (003), product/price export (004), inventory export (005),
