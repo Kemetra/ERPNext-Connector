@@ -30,14 +30,17 @@ governs when in doubt. Profiles: see [docs/agent-os/agent-profiles.yaml](docs/ag
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/002-doctype-mapping-reference/plan.md`
+`specs/003-data-pulse-auth-and-api-policy/plan.md`
 
-Active feature: 002 DocType Mapping Reference (docs-only mapping matrix + decision
-records; CITES Data-Pulse-2 as authoritative for the Retail Tower side, does NOT
-re-derive it; concept altitude only; NO connector code — see
-`.specify/memory/constitution.md`). Spec 001 (Frappe App Foundation) is implemented
-and validated; its plan is at `specs/001-frappe-app-foundation/plan.md`.
+Active feature: 003 Data-Pulse Auth & API Policy (docs/policy only; the connector
+authenticates TO Data-Pulse-2 as a tenant-scoped machine principal and is the HTTP
+client — pull/ack; CITES DP2's posting-feed.yaml contract + token machinery, does NOT
+re-derive; idempotent ack + no-duplicate posting (IV); no secrets in logs + correlation
+id (V, gate G4); NO connector code — see `.specify/memory/constitution.md`).
 
-Data-Pulse-2 backend repo (authoritative reference for RT-side mappings):
+Done: 001 Frappe App Foundation (implemented + validated), 002 DocType Mapping Reference
+(merged). Their plans are under `specs/00{1,2}-*/plan.md`.
+
+Data-Pulse-2 backend repo (authoritative reference, read-only):
 `C:\Users\user\Documents\GitHub\Data-Pulse-2`.
 <!-- SPECKIT END -->

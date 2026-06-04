@@ -1,0 +1,136 @@
+# Agent OS execution map — spec 003 Data-Pulse Auth & API Policy
+# Conforms to docs/agent-os/slice-schema.yaml. Maestro reads this as the
+# source of truth for slice state. Slices reference specs/003-.../tasks.md task IDs.
+#
+# This spec is docs/policy only (FR-011): all slices use the docs-mapping agent,
+# none touch gated surfaces (standing-rules §3), so approval_required is false.
+# Staging authentication (SC-001) is deferred — needs a staging env AND a DP2
+# connector token scope (see the TOKEN_SCOPE_DEPENDENCY slice / decision record).
+
+spec: 003-data-pulse-auth-and-api-policy
+version: 1
+base: origin/main
+
+findings: []
+
+slices:
+
+  - id: POLICY_SKELETON
+    task_ids: ["T001", "T002"]
+    type: docs
+    status: ready
+    approval_required: false
+    depends_on: []
+    blocks: ["AUTH_DIRECTION_AND_MODEL", "IDEMPOTENCY_AND_TAXONOMY", "SECRETS_AND_CORRELATION"]
+    agent: docs-mapping
+    allowed_files:
+      - docs/decisions/data-pulse-auth-and-api-policy.md
+    validation:
+      - command: review against spec FR-012 + research.md Decision 1
+        expected: skeleton + "Sources & precedence" present; direction = connector->DP2
+        bench_required: false
+    stop:
+      - if a cited Data-Pulse-2 path does not resolve in the DP2 repo
+    report_fields: [changed_files, validation_results, forbidden_path_check, confirmation_no_unauthorized_git_ops]
+    parallel_safety: unsafe          # shares the policy file with US1/US2/US3 slices
+
+  - id: TOKEN_SCOPE_DEPENDENCY
+    task_ids: ["T003"]
+    type: docs
+    status: ready
+    approval_required: false
+    depends_on: []
+    blocks: ["AUTH_DIRECTION_AND_MODEL"]
+    agent: docs-mapping
+    allowed_files:
+      - docs/decisions/connector-token-scope.md
+    validation:
+      - command: review against spec Dependencies + research.md Decision 3 gap #2
+        expected: decision record with question/options/sign-off; Blocks SC-001
+        bench_required: false
+    stop:
+      - if the record asserts a DP2 connector scope exists (it does not yet)
+    report_fields: [changed_files, validation_results, forbidden_path_check, confirmation_no_unauthorized_git_ops]
+    parallel_safety: safe            # separate file from the policy doc
+
+  - id: AUTH_DIRECTION_AND_MODEL
+    task_ids: ["T004", "T005"]
+    type: docs
+    status: blocked
+    approval_required: false
+    depends_on: ["POLICY_SKELETON", "TOKEN_SCOPE_DEPENDENCY"]
+    blocks: ["IDEMPOTENCY_AND_TAXONOMY", "SECRETS_AND_CORRELATION"]
+    agent: docs-mapping
+    allowed_files:
+      - docs/decisions/data-pulse-auth-and-api-policy.md
+    validation:
+      - command: review against FR-001/002/003
+        expected: connector->DP2 direction + machine-principal auth + scope-from-principal; cites DP2 token machinery
+        bench_required: false
+    stop:
+      - if the section implies the connector exposes an inbound surface DP2 calls
+    report_fields: [changed_files, validation_results, forbidden_path_check, confirmation_no_unauthorized_git_ops]
+    parallel_safety: unsafe          # shares the policy file
+
+  - id: IDEMPOTENCY_AND_TAXONOMY
+    task_ids: ["T006", "T007", "T008"]
+    type: docs
+    status: blocked
+    approval_required: false
+    depends_on: ["AUTH_DIRECTION_AND_MODEL"]
+    blocks: []
+    agent: docs-mapping
+    allowed_files:
+      - docs/decisions/data-pulse-auth-and-api-policy.md
+    validation:
+      - command: review against FR-004/005/006/010
+        expected: idempotency key + sourceSystem/externalId dedup + outcome/rejection enums + generic {doctype,name} + retry policy
+        bench_required: false
+    stop:
+      - if ERPNext is addressed via field-level names (must be generic {doctype,name})
+    report_fields: [changed_files, validation_results, forbidden_path_check, confirmation_no_unauthorized_git_ops]
+    parallel_safety: unsafe          # shares the policy file
+
+  - id: SECRETS_AND_CORRELATION
+    task_ids: ["T009", "T010"]
+    type: docs
+    status: blocked
+    approval_required: false
+    depends_on: ["AUTH_DIRECTION_AND_MODEL"]
+    blocks: []
+    agent: docs-mapping
+    allowed_files:
+      - docs/decisions/data-pulse-auth-and-api-policy.md
+    validation:
+      - command: review against FR-007/008/009 + gate G4
+        expected: token never in logs/errors/UI; log DP2 request_id (no invented field); revoked-token operator behavior
+        bench_required: false
+    stop:
+      - if the section invents a wire correlation field (DP2 has none)
+    report_fields: [changed_files, validation_results, forbidden_path_check, confirmation_no_unauthorized_git_ops]
+    parallel_safety: unsafe          # shares the policy file
+
+  - id: POLISH_AND_VERIFY
+    task_ids: ["T011", "T012", "T013"]
+    type: docs
+    status: blocked
+    approval_required: false
+    depends_on: ["IDEMPOTENCY_AND_TAXONOMY", "SECRETS_AND_CORRELATION"]
+    blocks: []
+    agent: docs-mapping
+    allowed_files:
+      - docs/decisions/data-pulse-auth-and-api-policy.md
+      - README.md
+    validation:
+      - command: verify every DP2 citation resolves in the DP2 repo
+        expected: all citations locate and confirm the claim (FR-012, SC-005)
+        bench_required: false
+      - command: run quickstart verification checklist
+        expected: SC-002..SC-006 pass; SC-001 marked deferred (staging + DP2 token scope)
+        bench_required: false
+    stop:
+      - if any cited DP2 path does not resolve
+    report_fields: [changed_files, validation_results, forbidden_path_check, confirmation_no_unauthorized_git_ops]
+    parallel_safety: unsafe          # edits the policy file (T011) + README
+
+groups: []

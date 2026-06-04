@@ -360,13 +360,22 @@ It cites Data-Pulse-2 as authoritative for the Retail Tower side (it does not re
 mapping) and records ambiguous mappings as decision records under `docs/decisions/`
 (`mapping-uom.md`, `mapping-customer.md`) with open sign-offs that gate later specs.
 
+**Spec 003 — Data-Pulse Auth & API Policy: drafted.** The connector↔Data-Pulse-2 secure-channel
+policy is at [`docs/decisions/data-pulse-auth-and-api-policy.md`](docs/decisions/data-pulse-auth-and-api-policy.md):
+the connector authenticates **to** Data-Pulse-2 as a tenant-scoped machine principal and is the
+HTTP client (pull/ack); idempotent ack + no-duplicate posting; no secrets in logs + correlation
+via the DP2 `request_id`. It is the **security gate (G4)** that specs 004+ ride on. An open
+dependency (`docs/decisions/connector-token-scope.md`) tracks that DP2 must provision a dedicated
+connector token scope before staging authentication.
+
 Next work item:
 
-003-data-pulse-auth-and-api-policy
+004-product-and-price-export
 
 Do not implement catalog, inventory, sales posting, or tax mutation before the relevant
-connector contract is reviewed (constitution Principle VII). Open mapping decisions
-(UOM, Customer) MUST be signed before specs 004/006 implement those concepts.
+connector contract is reviewed (constitution Principle VII). **Gates before 004+:** the open
+mapping decisions (UOM, Customer) and the connector-token-scope decision MUST be signed; the
+003 auth policy (G4) is in place.
 
 ---
 
