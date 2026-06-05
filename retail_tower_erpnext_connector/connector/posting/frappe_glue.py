@@ -33,12 +33,21 @@ from .contracts import ErpnextDocumentRef, OutcomeAckRequest, PostingWorkItem
 from .idempotency import IdempotencyConflict, IdempotencyStore, key_for
 from .reasons import FailureKind, scrub_message, to_rejection_reason
 from .transport import PostingFeedClient
-from .uom import MoneyConformanceError, PreResolvedWarehouse, UomMap
+from .uom import MoneyConformanceError, PreResolvedWarehouse, UnresolvedWarehouse, UomMap
 
 
-def _ack_key(key: tuple[str, str]) -> str:
-    """The connectorAckOutcome Idempotency-Key — required on EVERY outcome (012, F-004)."""
-    return f"{key[0]}:{key[1]}"
+def _ack_key(work_item: PostingWorkItem, outcome: str) -> str:
+    """The connectorAckOutcome Idempotency-Key — required on EVERY ack (012, F-004).
+
+    Codex-P1: the key must be **per-outcome**, not per-sale. One sale legitimately yields
+    `failed_transient` then `posted` on a re-offer; reusing one key across DIFFERENT outcomes
+    returns `409 idempotency_key_conflict` (resolution-concepts.md §4), which would make the
+    recovery `posted` ack unreachable after any transient. Keying on `(workItemRef, outcome)`
+    keeps each logical outcome's key stable (so a dropped-response resend of the SAME ack still
+    dedupes) while letting a later different outcome use its own key. NOT per-attempt — a
+    per-attempt nonce would break resend dedup.
+    """
+    return f"{work_item.work_item_ref}:{outcome}"
 
 
 def _transient_exceptions() -> tuple[type[BaseException], ...]:
@@ -68,13 +77,14 @@ def post_work_item(
     ⏳ BENCH-VALIDATION — exercises live ``frappe`` APIs; validated on staging, not locally.
     """
     key = key_for(work_item)
-    ack_key = _ack_key(key)
 
     # T041 — idempotent replay: an already-posted key echoes the existing documentRef.
     existing = store.get_document_ref(key)
     if existing is not None:
         client.ack_outcome(
-            work_item.work_item_ref, OutcomeAckRequest.posted(existing), idempotency_key=ack_key
+            work_item.work_item_ref,
+            OutcomeAckRequest.posted(existing),
+            idempotency_key=_ack_key(work_item, "posted"),
         )
         _log_signal("posting.replay", work_item, correlation_id)
         return "posted"
@@ -83,30 +93,30 @@ def post_work_item(
     # (012: kind=reversal). The reversal path is not in the interim R1 slice — fail closed
     # rather than mis-post a positive invoice. (Implementing it is a later slice.)
     if work_item.kind != "sale_post":
-        reason = to_rejection_reason(
+        return _reject(
+            client,
+            work_item,
+            correlation_id,
             FailureKind.OTHER,
-            message=f"work-item kind {work_item.kind!r} not supported in interim slice (R1)",
+            f"work-item kind {work_item.kind!r} not supported in interim slice (R1)",
         )
-        client.ack_outcome(
-            work_item.work_item_ref,
-            OutcomeAckRequest.permanently_rejected(reason),
-            idempotency_key=ack_key,
-        )
-        _log_signal("posting.rejected", work_item, correlation_id, category=reason.category)
-        return "permanently_rejected"
 
     # Build the Sales-Invoice payload from the pure-Python core (no frappe in the build).
-    # build_sales_invoice self-validates money (FR-009) and raises on an unmapped unit (FR-008)
-    # or a non-conformant amount — both are non-retryable validation failures.
+    # build_sales_invoice self-validates money (FR-009), raises on an unmapped unit (FR-008) or a
+    # non-conformant amount, and warehouse_for raises UnresolvedWarehouse on a store with no
+    # pre-resolved warehouse (rider R5 — should have DLQ'd in DP2). All are non-retryable; a final
+    # `except Exception` guarantees no build error escapes the terminal-outcome invariant
+    # (Codex-P2 / SC-001 / Principle VI).
     try:
         doc_payload = build_sales_invoice(
             work_item, uom_for=uom_map.resolve, warehouse_for=warehouses.for_store
         )
-    except (UnmappedUnit, MoneyConformanceError) as exc:
-        kind = (
-            FailureKind.UNMAPPED_UNIT if isinstance(exc, UnmappedUnit) else FailureKind.VALIDATION
-        )
-        return _reject(client, work_item, correlation_id, ack_key, kind, str(exc))
+    except UnmappedUnit as exc:
+        return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, str(exc))
+    except (MoneyConformanceError, UnresolvedWarehouse) as exc:
+        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
+    except Exception as exc:  # any other build error is non-retryable — never let it escape.
+        return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
 
     # T031 — submit on ERPNext (interim SI-only; rider R1 — no Payment Entry here).
     try:
@@ -117,16 +127,18 @@ def post_work_item(
     except _transient_exceptions() as exc:
         # T051 — transient (timeout/lock) → failed_transient; DP2 re-offers (no self-retry).
         client.ack_outcome(
-            work_item.work_item_ref, OutcomeAckRequest.failed_transient(), idempotency_key=ack_key
+            work_item.work_item_ref,
+            OutcomeAckRequest.failed_transient(),
+            idempotency_key=_ack_key(work_item, "failed_transient"),
         )
         _log_signal("posting.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
         return "failed_transient"
     except frappe.ValidationError as exc:  # type: ignore[attr-defined]
         # T051 — validation failure → permanently_rejected / validation.
-        return _reject(client, work_item, correlation_id, ack_key, FailureKind.VALIDATION, str(exc))
+        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
     except Exception as exc:  # any OTHER error is non-retryable (F-005), not transient.
         # Decision table row 9: an unclassified non-retryable error → permanently_rejected / other.
-        return _reject(client, work_item, correlation_id, ack_key, FailureKind.OTHER, str(exc))
+        return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
 
     # Record the posting, then ack. A concurrent double-record (another worker recorded a
     # different ref for this key first) is resolved by echoing the recorded ref.
@@ -147,7 +159,7 @@ def post_work_item(
     client.ack_outcome(
         work_item.work_item_ref,
         OutcomeAckRequest.posted(document_ref),
-        idempotency_key=ack_key,
+        idempotency_key=_ack_key(work_item, "posted"),
     )
     _log_signal("posting.posted", work_item, correlation_id, document_ref=document_ref.name)
     return "posted"
@@ -157,16 +169,18 @@ def _reject(
     client: PostingFeedClient,
     work_item: PostingWorkItem,
     correlation_id: str,
-    ack_key: str,
     kind: FailureKind,
     message: str,
 ) -> str:
-    """Ack a non-retryable failure with a closed-set reason (scrubbed). F-003/F-004."""
+    """Ack a non-retryable failure with a closed-set reason (scrubbed). F-003/F-004.
+
+    Uses the per-outcome ack key for ``permanently_rejected`` (Codex-P1).
+    """
     reason = to_rejection_reason(kind, message=message)  # scrubs the message (Gate G4)
     client.ack_outcome(
         work_item.work_item_ref,
         OutcomeAckRequest.permanently_rejected(reason),
-        idempotency_key=ack_key,
+        idempotency_key=_ack_key(work_item, "permanently_rejected"),
     )
     _log_signal("posting.rejected", work_item, correlation_id, category=reason.category)
     return "permanently_rejected"

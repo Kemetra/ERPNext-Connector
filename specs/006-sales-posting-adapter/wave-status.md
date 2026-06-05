@@ -60,6 +60,24 @@ verified real and fixed:
   dependency — the SI requires a `customer` the 012 work-item doesn't carry; the slice does NOT
   fabricate one (Principle VI). Must be resolved before T031 bench validation.
 
+## Cross-model review (Codex, on PR #17) — 2 findings, both fixed
+
+OpenAI Codex reviewed commit `ce377d5` on PR #17 and posted 2 findings on `frappe_glue.py`
+(both verified real, fixed-by-inspection; glue stays ⏳ BENCH-VALIDATION):
+
+- **Codex-P1 — per-outcome ack idempotency key.** The ack `Idempotency-Key` was keyed on the
+  sale `(sourceSystem, externalId)` only, so a `failed_transient` ack and a later recovery
+  `posted` ack on a re-offer reused the SAME key with DIFFERENT outcomes → `409
+  idempotency_key_conflict` (resolution-concepts.md §4), making the recovery ack unreachable.
+  **Fix:** `_ack_key(work_item, outcome)` = `{workItemRef}:{outcome}` — per-outcome, NOT
+  per-attempt (a per-attempt nonce would break resend dedup). The two `posted` sites share a key
+  (same logical outcome); transient and reject get their own.
+- **Codex-P2 — `UnresolvedWarehouse` escaped the terminal-outcome invariant.** The build
+  try-block caught only `(UnmappedUnit, MoneyConformanceError)`, so `warehouse_for` raising
+  `UnresolvedWarehouse` (unknown store, rider R5) exited `post_work_item` with NO ack — violating
+  SC-001 / Principle VI. **Fix:** catch `UnresolvedWarehouse` → `permanently_rejected`/`validation`,
+  AND add a final `except Exception` → `other` on the build block so no build error escapes.
+
 ## Authored-but-deferred — frappe glue (⏳ BENCH-VALIDATION, NOT run, NOT claimed passing)
 
 - **T031/T032/T041/T051/T090** → `connector/posting/frappe_glue.py` (`post_work_item` +
