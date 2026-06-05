@@ -231,6 +231,15 @@ Re-evaluated after Phase 1 (design = the existing companion docs; `data-model.md
   `scheduler_event` only). Implementation stays blocked behind the inherited DP-015 arc gates
   (follow-up-notes.md §2) and the remaining Spec-Kit chain (`tasks.md` → `execution-map.yaml`).
 
-**Result**: PASS (post-design). No new violations. Next Spec-Kit step is `/speckit-tasks` — but it
-remains **gated** behind the inherited DP-015 arc implementation prerequisites
-([follow-up-notes.md §2](./follow-up-notes.md)) and is **not** authorized by this plan slice.
+**Result**: PASS (post-design). No new violations. Next Spec-Kit step is `/speckit-tasks`.
+
+> **Gate status (verified 2026-06-06).** The DP-015 arc implementation prerequisites that
+> `follow-up-notes.md §2` recorded as owner-deferred blockers (written 2026-06-05) are now
+> **satisfied on Data-Pulse-2 `main`**: `P-DP-008-LIVELOOP` (DP-2 #496/#497), DP-014 warehouse map
+> (#495), the 012 `erpnextItemRef` correction (#494), and the DP-015 Spec-Kit chain (#500). So the
+> *authoring* gate for connector `tasks.md` is open. `follow-up-notes.md §2` (a merged §3-gated
+> artifact) is left untouched; this dated note reconciles it. **Authoring `tasks.md` is not the same
+> as authorizing the first implementation dispatch** — connector *execution* additionally depends on
+> DP2 serving the live posting feed and on a staging ERPNext v15 bench (recorded as inherited
+> execution dependencies in `tasks.md`); `/speckit-tasks` is **not** self-authorized by this plan
+> slice (a separate, explicit instruction crosses that threshold).
