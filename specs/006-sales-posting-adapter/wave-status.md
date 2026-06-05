@@ -78,6 +78,28 @@ OpenAI Codex reviewed commit `ce377d5` on PR #17 and posted 2 findings on `frapp
   SC-001 / Principle VI. **Fix:** catch `UnresolvedWarehouse` → `permanently_rejected`/`validation`,
   AND add a final `except Exception` → `other` on the build block so no build error escapes.
 
+### Codex re-review (commit `dc75980`) — 2 further P2s, recorded, NOT fixed in this slice
+
+A second Codex pass on the fix commit surfaced two deeper findings. Both verified real; neither
+is fixed here (one is bench-coupled, the other is an open spec tension) — recorded as open items:
+
+- **Codex-re-P2a — collapsed rejection categories (bench-deferred).** The `frappe.ValidationError`
+  handler maps every submit-validation failure to `validation`, but ERPNext signals closed-period
+  and unmapped-account as `ValidationError` subtypes too — so `closed_period` / `unmapped_account`
+  (decision-table rows 4/6; the `reasons.py` vocabulary exists) collapse to `validation`, losing
+  the distinction for DP2 017 reconciliation. **NOT fixed locally:** distinguishing them requires
+  knowing which ERPNext exception class/message signals each — a **bench** fact, not safely guessed
+  from memory. Same deferral bucket as T031/T051 (bench glue). Must be resolved at bench time.
+- **Codex-re-P2b — batch-parse abort vs per-item ack (OPEN SPEC TENSION).** A feed page line
+  missing `erpnextItemRef` makes `PostingWorkItem.from_wire` raise mid-parse (`transport.py`),
+  aborting the whole page before any item is acked. Codex wants isolate-and-continue (ack the bad
+  item, keep the good ones). **The spec itself says the opposite:** spec.md:233 and
+  resolution-concepts.md:73 / row 8 both prescribe `permanently_rejected`/`validation` **AND
+  STOP-and-raise** for this upstream-contract-violation case. The current code's abort-the-parse IS
+  the STOP-and-raise the spec mandates. The two directives (per-item ack vs stop-and-raise) are in
+  tension for a batch pull — this is an **unresolved spec question, not a code defect**; resolving
+  it (graceful-degrade vs hard-stop) is a spec decision, not silently coded to Codex's reading.
+
 ## Authored-but-deferred — frappe glue (⏳ BENCH-VALIDATION, NOT run, NOT claimed passing)
 
 - **T031/T032/T041/T051/T090** → `connector/posting/frappe_glue.py` (`post_work_item` +
