@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/assets/brand/connector-logo.svg" alt="Retail Tower ERPNext Connector logo" width="120" height="120"/>
+
 # Retail Tower ERPNext Connector
 
 **The ERPNext-facing integration layer for Retail Tower OS — the only component allowed to touch ERPNext.**
