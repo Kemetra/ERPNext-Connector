@@ -71,13 +71,31 @@ will flag these files, but it already flags the whole repo; that is a pre-existi
 mismatch for the maintainer to resolve separately, not this slice's regression. `ruff check` (lint)
 is clean.
 
-**NOT YET PROVEN (this commit is the CODE slice; bench validation is the next step):** the
-end-to-end `run_posting_poll()` with the harness customer-injection OFF — that is the real F-009
-closure proof (1 SI, provenance lands, DP2 → `posted`, customer from Connector Settings not the
-harness). **Known risk to check FIRST at bench time:** the builder drops `company` (bets ERPNext's
-default company on a single-company site); the old harness injected BOTH customer AND company, so if
-the bench has no default company set, submit fails — confirm a default company OR add a
-`store_company_map` child table (trivial; `config._parse_pairs` already generalizes) before running.
+**F-009 PROVEN END-TO-END (2026-06-06, live: DP2 main api+worker + WSL ERPNext bench).** The
+acceptance bar — `run_posting_poll()` driven directly (the REAL scheduled cron entrypoint, NO
+harness, NO monkeypatch, NO injected client/maps) with the harness customer-injection GONE — is met,
+verified at BOTH sources (not a harness print):
+- **ERPNext:** exactly ONE Sales Invoice `ACC-SINV-2026-00007`, **docstatus=1 (submitted)**, total
+  19.99, **`customer='E2E Customer'` sourced from Connector Settings** (the store→customer map). The
+  builder is the ONLY customer source and the harness injection is removed, so the customer can ONLY
+  have come from config — that is the F-009 closure. `company='E2E Co'` resolved from the default
+  company (the dropped-`company` bet held — preflight confirmed a default company was set). Provenance
+  custom fields landed (`rt_source_system=retail_tower_pos`, `rt_external_id`, `rt_sale_ref`).
+- **DP2:** the posting row → `status=posted`, `document_ref={"doctype":"Sales Invoice",
+  "name":"ACC-SINV-2026-00007"}` — matches the SI the connector posted.
+- **What this proves that prior sessions could not:** the connector posts in production with NO
+  harness — the customer comes from operator config, and the **real composition root** ran
+  (`_build_posting_path` → `frappe.get_doc("Connector Settings")` → `get_password("dp2_token")`
+  decrypt → the child-table parsers → `_RequestsTransport` over `connectorBearer`). The poller is no
+  longer inert. The proof artifact is `live-e2e/f009_poll_drive.py` (kept as a re-runnable regression
+  peer to `bench-g5-probe.py` / `bench-f002-probe.py`; `bench run-tests` cannot run it — same caveat).
+
+**Still NOT proven (carried forward as deferred, NOT regressions):** `failed_transient`/retry-budget
+live; Codex-re-P2a (closed_period/unmapped_account granularity — needs the real ERPNext exception
+classes); the reversal slice (must honor the F-002 forward constraint above); multi-company
+`store_company_map` (single-company bench defaulted `company`; the child table is trivial to add when
+a multi-company tenant appears — `config._parse_pairs` already generalizes); the insert↔submit
+draft-crash residual edge; and the test-infra debt (connector tests not runnable under one runner).
 
 ## Gate G5 / F-002 — crash-window exactly-once CLOSED (2026-06-06, bench-validated RED→GREEN)
 
