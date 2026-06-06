@@ -77,6 +77,53 @@ class TestParseWarehouseMap:
             )
 
 
+class TestRequireConfiguredMaps:
+    # Codex PR #23 P1: a half-configured connector (creds saved, a required map still empty) must
+    # SKIP the tick (run_posting_poll catches the raise → posting.poll.skipped, sales stay pending),
+    # NOT activate and mass-reject every pending sale as terminal validation. Every work-item has a
+    # store + >=1 line, so an empty uom/warehouse/customer map => 100% rejection — indistinguishable
+    # from "not yet configured". So an EMPTY required map raises ConfigError (→ skip).
+    def test_all_maps_populated_passes(self):
+        cfg.require_configured_maps(
+            uom={"each": "Nos"},
+            warehouse={"s1": {"doctype": "Warehouse", "name": "WH"}},
+            customer={"s1": "C1"},
+        )  # must not raise
+
+    def test_empty_uom_map_raises(self):
+        with pytest.raises(cfg.ConfigError):
+            cfg.require_configured_maps(uom={}, warehouse={"s1": {}}, customer={"s1": "C1"})
+
+    def test_empty_warehouse_map_raises(self):
+        with pytest.raises(cfg.ConfigError):
+            cfg.require_configured_maps(uom={"each": "Nos"}, warehouse={}, customer={"s1": "C1"})
+
+    def test_empty_customer_map_raises(self):
+        with pytest.raises(cfg.ConfigError):
+            cfg.require_configured_maps(
+                uom={"each": "Nos"}, warehouse={"s1": {}}, customer={}
+            )
+
+    def test_error_names_every_empty_map(self):
+        # The skip-reason log should say WHICH maps are unconfigured, not just "a map is empty".
+        with pytest.raises(cfg.ConfigError) as exc:
+            cfg.require_configured_maps(uom={}, warehouse={}, customer={"s1": "C1"})
+        msg = str(exc.value)
+        assert "uom" in msg.lower() and "warehouse" in msg.lower()
+
+    def test_does_not_swallow_partial_miss(self):
+        # REGRESSION GUARD against over-correcting: a NON-empty map with a specific key absent is a
+        # genuine terminal rejection (decision-table rows 5/8), NOT a skip. require_configured_maps
+        # only gates the EMPTY (not-configured) state — it must not inspect individual keys, so a
+        # populated-but-incomplete map passes the gate (the per-item UnmappedUnit/UnmappedStore
+        # reject still fires downstream in frappe_glue, unchanged).
+        cfg.require_configured_maps(
+            uom={"each": "Nos"},  # "kg" absent — store B unmapped — still must NOT skip
+            warehouse={"s1": {"doctype": "Warehouse", "name": "WH"}},
+            customer={"s1": "C1"},
+        )  # must not raise — partial config is "live", not "unconfigured"
+
+
 class TestParseStoreCustomerMap:
     def test_parses_rows_to_store_customer_dict(self):
         rows = [{"store_id": "s1", "customer": "Walk-in Customer - RT"}]

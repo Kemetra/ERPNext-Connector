@@ -71,18 +71,30 @@ def _build_posting_path():
     UOM map, and the pre-resolved warehouse map — then binds frappe_glue.post_work_item to them.
     Finalised at bench time (reads Connector Settings + signed decisions).
     """
+    from .config import require_configured_maps
     from .frappe_glue import post_work_item  # local import: glue imports frappe-only symbols
     from .transport import PostingFeedClient
     from .uom import PreResolvedWarehouse, StoreCustomerMap, UomMap
 
     correlation_id = frappe.generate_hash(length=16)
     settings = frappe.get_doc("Connector Settings")  # one read; child tables + Password live here
+
+    # Parse the maps, then GATE: a fully-empty required map means the connector is not yet
+    # configured (every work-item has a store + >=1 line, so an empty map would 100%-reject). Raise
+    # so run_posting_poll catches it → posting.poll.skipped, sales stay pending — NOT mass-rejected
+    # to DP2's DLQ (Codex PR #23 P1). A populated-but-incomplete map is NOT gated here: a specific
+    # absent key is a genuine per-item terminal rejection downstream (decision-table rows 5/8).
+    uom = _load_uom_map(settings)
+    warehouse = _load_warehouse_map(settings)
+    customer = _load_store_customer_map(settings)
+    require_configured_maps(uom=uom, warehouse=warehouse, customer=customer)
+
     transport = _build_http_transport(settings)  # auth-backed HTTP client to DP2 (spec 003)
     client = PostingFeedClient(transport, correlation_id=correlation_id)
     store = FrappePostingLogStore()
-    uom_map = UomMap(_load_uom_map(settings))
-    warehouses = PreResolvedWarehouse(_load_warehouse_map(settings))
-    customers = StoreCustomerMap(_load_store_customer_map(settings))  # F-009
+    uom_map = UomMap(uom)
+    warehouses = PreResolvedWarehouse(warehouse)
+    customers = StoreCustomerMap(customer)  # F-009
 
     def post_valid(work_item) -> None:
         post_work_item(
