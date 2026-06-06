@@ -5,9 +5,17 @@
 # FrappePostingLogStore (Gate G5), a UomMap, and a PreResolvedWarehouse. This is the
 # connector-side e2e harness the gated poller would otherwise own (see tier2-e2e-milestone memory).
 #
-# Run inside the bench:
-#   docker exec -i devcontainer-frappe-1 bash -lc \
-#     'cd /workspace/development/frappe-bench && bench --site retail.localhost console' < drive_connector.py
+# Run inside the bench — `bench execute` imports this module and calls main() with real module
+# scope + a frappe site/db context (NOT `bench console < file`, which runs as IPython cells and
+# does NOT reliably invoke an entry point — it validates nothing). First copy this file into the
+# bench app dir so it is importable, then:
+#   docker cp drive_connector.py \
+#     devcontainer-frappe-1:/workspace/development/frappe-bench/apps/retail_tower_erpnext_connector/retail_tower_erpnext_connector/connector/posting/drive_connector.py
+#   docker exec -e RT_E2E_MODE=reject -i devcontainer-frappe-1 bash -lc \
+#     'cd /workspace/development/frappe-bench && bench --site retail.localhost execute \
+#        retail_tower_erpnext_connector.connector.posting.drive_connector.main'
+# (The `if __name__ == "__main__"` guard below also lets it run as a plain script under a
+#  frappe-initialised interpreter; it does NOT fire on the `bench execute` import path.)
 #
 # RT_E2E_MODE env: "reject" (faithful, default) or "posted" (injects customer/company into the
 # payload AFTER build_sales_invoice runs — harness-only; the connector builder stays untouched).
@@ -129,3 +137,10 @@ def main():
     still = any(i.work_item_ref == wi.work_item_ref for i in after.items)
     print("DP2 feed still offers this ref after ack? %s (expect False)" % still)
     print("=== DONE: outcome=%s, feed_cleared=%s ===" % (outcome, not still))
+
+
+# `bench execute ...drive_connector.main` imports this module and calls main() itself — the guard
+# does NOT fire on that import path (so main() never runs twice). The guard only triggers when the
+# file is run as a plain script under a frappe-initialised interpreter.
+if __name__ == "__main__":
+    main()
