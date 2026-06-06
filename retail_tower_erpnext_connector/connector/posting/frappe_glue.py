@@ -33,7 +33,14 @@ from .contracts import ErpnextDocumentRef, OutcomeAckRequest, PostingWorkItem
 from .idempotency import IdempotencyConflict, IdempotencyStore, key_for
 from .reasons import FailureKind, scrub_message, to_rejection_reason
 from .transport import PostingFeedClient
-from .uom import MoneyConformanceError, PreResolvedWarehouse, UnresolvedWarehouse, UomMap
+from .uom import (
+    MoneyConformanceError,
+    PreResolvedWarehouse,
+    StoreCustomerMap,
+    UnmappedStore,
+    UnresolvedWarehouse,
+    UomMap,
+)
 
 
 def _ack_key(work_item: PostingWorkItem, outcome: str) -> str:
@@ -106,6 +113,7 @@ def post_work_item(
     store: IdempotencyStore,
     uom_map: UomMap,
     warehouses: PreResolvedWarehouse,
+    customers: StoreCustomerMap,
     correlation_id: str,
 ) -> str:
     """Post one work-item to ERPNext and ack the outcome. Returns the resulting outcome string.
@@ -145,11 +153,16 @@ def post_work_item(
     # (Codex-P2 / SC-001 / Principle VI).
     try:
         doc_payload = build_sales_invoice(
-            work_item, uom_for=uom_map.resolve, warehouse_for=warehouses.for_store
+            work_item,
+            uom_for=uom_map.resolve,
+            warehouse_for=warehouses.for_store,
+            customer_for=customers.for_store,
         )
     except UnmappedUnit as exc:
         return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, str(exc))
-    except (MoneyConformanceError, UnresolvedWarehouse) as exc:
+    except (MoneyConformanceError, UnresolvedWarehouse, UnmappedStore) as exc:
+        # UnmappedStore (F-009): a store with no configured Customer fails closed → validation,
+        # exactly like an unresolved warehouse — never fabricate a customer (Principle VI).
         return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
     except Exception as exc:  # any other build error is non-retryable — never let it escape.
         return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))

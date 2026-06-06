@@ -62,37 +62,92 @@ def _warehouse(store_id: str) -> dict:
     return {"doctype": "Warehouse", "name": "Main - RT"}
 
 
+def _customer(store_id: str) -> str:
+    # F-009: the operator-configured store→customer map (the 012 work-item carries no customer).
+    return "Walk-in Customer - RT"
+
+
 class TestBuilderHappyPath:
     def test_builds_one_sales_invoice_doc(self):
-        doc = b.build_sales_invoice(_work_item(), uom_for=_uom, warehouse_for=_warehouse)
+        doc = b.build_sales_invoice(
+            _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+        )
         assert doc["doctype"] == "Sales Invoice"
         assert len(doc["items"]) == 1
 
     def test_applies_erpnext_item_ref_as_item_code(self):
-        doc = b.build_sales_invoice(_work_item(), uom_for=_uom, warehouse_for=_warehouse)
+        doc = b.build_sales_invoice(
+            _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+        )
         # T030: the line references the APPLIED Item by name; no resolution happened.
         assert doc["items"][0]["item_code"] == "ITEM-A"
 
     def test_carries_business_date_as_posting_date(self):
         # T033: businessDate → posting_date (never the connector's post-time).
-        doc = b.build_sales_invoice(_work_item(), uom_for=_uom, warehouse_for=_warehouse)
+        doc = b.build_sales_invoice(
+            _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+        )
         assert doc["posting_date"] == "2026-06-01"
 
     def test_carries_provenance(self):
-        doc = b.build_sales_invoice(_work_item(), uom_for=_uom, warehouse_for=_warehouse)
+        doc = b.build_sales_invoice(
+            _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+        )
         assert doc["rt_source_system"] == "pos-pulse"
         assert doc["rt_external_id"] == "POS-9001"
 
     def test_applies_uom_and_warehouse(self):
-        doc = b.build_sales_invoice(_work_item(), uom_for=_uom, warehouse_for=_warehouse)
+        doc = b.build_sales_invoice(
+            _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+        )
         assert doc["items"][0]["uom"] == "Nos"
         assert doc["items"][0]["warehouse"] == "Main - RT"
+
+
+class TestBuilderCustomer:
+    # F-009 closure: build_sales_invoice now takes a customer_for(store_id)->str resolver and
+    # emits doc['customer']. The customer comes from operator config (store→customer map), never
+    # fabricated by the builder. A store with no mapping fails closed (UnmappedStore propagates).
+    def test_emits_customer_from_resolver(self):
+        doc = b.build_sales_invoice(
+            _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+        )
+        assert doc["customer"] == "Walk-in Customer - RT"
+
+    def test_customer_resolver_receives_store_id(self):
+        seen = {}
+
+        def _capture(store_id: str) -> str:
+            seen["store_id"] = store_id
+            return "C1"
+
+        b.build_sales_invoice(
+            _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_capture
+        )
+        # The customer is resolved from the SALE's store_id (the only 012 identifier an operator
+        # can map), not the line or work-item ref.
+        assert seen["store_id"] == "33333333-3333-4333-8333-333333333333"
+
+    def test_unmapped_store_propagates_unmapped_store(self):
+        # A store with no customer mapping must fail closed — the builder does not invent a
+        # customer (Principle VI). The caller maps UnmappedStore → permanently_rejected/validation.
+        from retail_tower_erpnext_connector.connector.posting import uom as u
+
+        def _unmapped(store_id: str) -> str:
+            raise u.UnmappedStore(store_id)
+
+        with pytest.raises(u.UnmappedStore):
+            b.build_sales_invoice(
+                _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_unmapped
+            )
 
 
 class TestBuilderMoneyFidelity:
     def test_money_is_exact_decimal_strings_not_float(self):
         # T033: every monetary field stays an exact-decimal string; no float anywhere.
-        doc = b.build_sales_invoice(_work_item(), uom_for=_uom, warehouse_for=_warehouse)
+        doc = b.build_sales_invoice(
+            _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+        )
         item = doc["items"][0]
         assert item["rate"] == "100.00"
         assert item["amount"] == "200.00"
@@ -102,7 +157,9 @@ class TestBuilderMoneyFidelity:
             assert not isinstance(value, float)
 
     def test_currency_code_present(self):
-        doc = b.build_sales_invoice(_work_item(), uom_for=_uom, warehouse_for=_warehouse)
+        doc = b.build_sales_invoice(
+            _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+        )
         assert doc["currency"] == "EGP"
 
 
@@ -110,7 +167,9 @@ class TestBuilderSelfValidatesMoney:
     def test_builder_output_is_money_conformant(self):
         # F-007: build_sales_invoice enforces money conformance on its OWN output before
         # returning — FR-009 is enforced in the path, not only by a separately-callable check.
-        doc = b.build_sales_invoice(_work_item(), uom_for=_uom, warehouse_for=_warehouse)
+        doc = b.build_sales_invoice(
+            _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+        )
         # The builder must have validated; re-asserting here proves the contract holds.
         from retail_tower_erpnext_connector.connector.posting import uom as u
 
@@ -145,7 +204,9 @@ class TestBuilderSelfValidatesMoney:
         from retail_tower_erpnext_connector.connector.posting import uom as u
 
         with pytest.raises(u.MoneyConformanceError):
-            b.build_sales_invoice(wi, uom_for=_uom, warehouse_for=_warehouse)
+            b.build_sales_invoice(
+                wi, uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+            )
 
 
 class TestBuilderFailClosed:
@@ -171,7 +232,9 @@ class TestBuilderFailClosed:
             raise b.UnmappedUnit(unit)
 
         with pytest.raises(b.UnmappedUnit):
-            b.build_sales_invoice(wi, uom_for=_uom_unmapped, warehouse_for=_warehouse)
+            b.build_sales_invoice(
+                wi, uom_for=_uom_unmapped, warehouse_for=_warehouse, customer_for=_customer
+            )
 
     def test_builder_never_resolves_item_identity(self):
         # The builder takes erpnextItemRef as-is; there is no resolution hook to pass.

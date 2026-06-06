@@ -1,23 +1,66 @@
 {
  "actions": [],
  "creation": "2026-06-04 00:00:00.000000",
- "description": "Placeholder for Retail Tower connector configuration. No active integration behavior at the foundation (spec 001); settings are added by later specs against reviewed contracts.",
+ "description": "Retail Tower connector configuration (spec 006 — sales posting). The DP2 posting-feed endpoint + auth token and the operator-owned mapping tables (unit→UOM, store→warehouse, store→customer) the scheduled poller reads each tick. The token is a secret (Password field, Gate G4 — never logged).",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "placeholder_note"
+  "dp2_section",
+  "dp2_base_url",
+  "dp2_token",
+  "maps_section",
+  "uom_map",
+  "warehouse_map",
+  "store_customer_map"
  ],
  "fields": [
   {
-   "fieldname": "placeholder_note",
-   "fieldtype": "HTML",
-   "label": "Placeholder Note",
-   "options": "<div class=\"text-muted\">This is a configuration placeholder (spec 001 — Frappe App Foundation). No active integration is configured at the foundation layer. Connector settings fields are added by later specs (003+) against their reviewed contracts.</div>"
+   "fieldname": "dp2_section",
+   "fieldtype": "Section Break",
+   "label": "Data-Pulse-2 Posting Feed"
+  },
+  {
+   "fieldname": "dp2_base_url",
+   "fieldtype": "Data",
+   "label": "DP2 Base URL",
+   "description": "Base URL of the Data-Pulse-2 connector API, e.g. https://dp2.example.com. The poller appends /api/connector/v1/erpnext/postings (spec 003)."
+  },
+  {
+   "fieldname": "dp2_token",
+   "fieldtype": "Password",
+   "label": "DP2 Connector Token",
+   "description": "The opaque connectorBearer token (spec 003). SECRET — stored encrypted, read via get_password, never logged (Gate G4). Hand-issued DP2-side; the connector only presents it."
+  },
+  {
+   "fieldname": "maps_section",
+   "fieldtype": "Section Break",
+   "label": "Posting Maps"
+  },
+  {
+   "fieldname": "uom_map",
+   "fieldtype": "Table",
+   "options": "RT Uom Map Row",
+   "label": "Unit → UOM Map",
+   "description": "Signed Option-A unit→ERPNext-UOM map (FR-008). An unmapped unit fails closed → validation."
+  },
+  {
+   "fieldname": "warehouse_map",
+   "fieldtype": "Table",
+   "options": "RT Warehouse Map Row",
+   "label": "Store → Warehouse Map",
+   "description": "Store→ERPNext-Warehouse map applying the DP2-pre-resolved warehouse (FR-010, rider R5)."
+  },
+  {
+   "fieldname": "store_customer_map",
+   "fieldtype": "Table",
+   "options": "RT Store Customer Map Row",
+   "label": "Store → Customer Map",
+   "description": "Store→ERPNext-Customer map (F-009). The 012 work-item carries no customer; an unmapped store fails closed → validation. The connector never fabricates a customer (Principle VI)."
   }
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-06-04 00:00:00.000000",
+ "modified": "2026-06-06 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Connector",
  "name": "Connector Settings",

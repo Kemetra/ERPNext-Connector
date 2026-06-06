@@ -25,6 +25,60 @@ Corrected the client/poller against the verified served contract (TDD; suite **8
 must always carry status (note: `requests` exposes `.status_code`, the Protocol will adapt). Not yet
 exercised against a live DP2 (Tier 2).
 
+## Poller activation + F-009 closure — code slice (2026-06-06, branch `feat/con-006-poller-activation-f009`)
+
+The connector moves from "harness-validated machinery" toward "runs on the cron": the customer
+source is closed (F-009) and the poller's config stubs are wired to read Connector Settings.
+
+**F-009 — customer source CLOSED (build side, locally TDD'd):** the gate was a repo fact, verified
+not assumed — `contracts.Sale` carries `store_id` (+ `source_system`), the only operator-mappable
+identifiers; the 012 work-item carries no customer. So the customer is a **store→Customer map**,
+exactly parallel to the existing store→warehouse map. `build_sales_invoice` gains a REQUIRED
+`customer_for(store_id)->str` resolver (required, not optional-with-default — a default would let a
+caller silently reintroduce F-009); `uom.StoreCustomerMap` resolves it and **fails closed**
+(`UnmappedStore` → `permanently_rejected`/`validation`) — the connector NEVER fabricates a customer
+(Principle VI). `frappe_glue` propagates `customers` and catches `UnmappedStore` in the existing
+validation-reject branch. RED→GREEN locally: builder + StoreCustomerMap + the config parsers (below);
+**108 passed**, ruff lint clean.
+
+**Poller config wiring (the module is no longer inert):** `poller._build_http_transport` /
+`_load_uom_map` / `_load_warehouse_map` / `_load_store_customer_map` now read **Connector Settings**.
+The pure parse logic is split into `connector/posting/config.py` (`parse_uom_map` /
+`parse_warehouse_map` / `parse_store_customer_map`) — frappe-free, unit-tested locally (empty rows,
+half-filled rows → `ConfigError` fail-loud, duplicate keys → `ConfigError`), paying down the
+test-infra debt for THIS slice's own code. Only a thin frappe shell remains: one
+`frappe.get_doc("Connector Settings")`, `.get_password("dp2_token")` (Gate G4 — NOT
+`get_single_value`, which masks a Password), and `cfg.parse_*(doc.<child_table>)` (child rows are
+not in `tabSingles`, so they must be read via the doc object). A missing base-URL/token raises →
+`run_posting_poll()` skips the tick cleanly (logged `posting.poll.skipped`), never posting blind.
+
+**[GATED] §3 surfaces — user-approved for this slice.** "finish what remains … i authorize"
+authorizes the gated surfaces this activation REQUIRES (the poller is *designed* inert until they
+land — declined in prior sessions, now in scope). Recorded explicitly per standing-rules §3:
+- **`connector_settings/connector_settings.json`** — extended from placeholder to: `dp2_base_url`
+  (Data), `dp2_token` (**Password**, Gate G4 — stored encrypted, read via `get_password`, never
+  logged), and three Table fields (`uom_map`/`warehouse_map`/`store_customer_map`).
+- **Three new child DocTypes** (`rt_uom_map_row`, `rt_warehouse_map_row`, `rt_store_customer_map_row`)
+  — JSON + `__init__.py` + a `Document`-subclass controller `.py` each (required, or
+  `frappe.get_doc("Connector Settings")` fails on `get_controller` import at the bench). Child
+  fieldnames cross-checked to match the `config.py` parsers exactly (a mismatch → silent blanks →
+  `ConfigError`).
+
+**Lint posture (surfaced, NOT silently resolved):** the repo's `pyproject.toml` sets
+`[tool.ruff.format] indent-style = "tab"`, but **every committed file is spaces** (no file has ever
+obeyed the tab config). This slice matches the committed convention (spaces) — `ruff format --check`
+will flag these files, but it already flags the whole repo; that is a pre-existing config/convention
+mismatch for the maintainer to resolve separately, not this slice's regression. `ruff check` (lint)
+is clean.
+
+**NOT YET PROVEN (this commit is the CODE slice; bench validation is the next step):** the
+end-to-end `run_posting_poll()` with the harness customer-injection OFF — that is the real F-009
+closure proof (1 SI, provenance lands, DP2 → `posted`, customer from Connector Settings not the
+harness). **Known risk to check FIRST at bench time:** the builder drops `company` (bets ERPNext's
+default company on a single-company site); the old harness injected BOTH customer AND company, so if
+the bench has no default company set, submit fails — confirm a default company OR add a
+`store_company_map` child table (trivial; `config._parse_pairs` already generalizes) before running.
+
 ## Gate G5 / F-002 — crash-window exactly-once CLOSED (2026-06-06, bench-validated RED→GREEN)
 
 The crash-between-submit-and-record window (F-002) is closed by a coordinated two-part fix, proven

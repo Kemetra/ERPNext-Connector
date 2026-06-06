@@ -75,6 +75,41 @@ class PreResolvedWarehouse:
             raise UnresolvedWarehouse(store_id) from None
 
 
+class UnmappedStore(Exception):
+    """A store has no operator-configured ERPNext Customer (F-009 fail-closed).
+
+    The 012 work-item carries no customer identity, only ``Sale.store_id``. The operator maps
+    each store to its ERPNext Customer (config, injected) — exactly parallel to the warehouse
+    map. A store with no mapping fails closed → ``permanently_rejected`` / ``validation`` (the
+    connector NEVER fabricates a default customer; that would hide the config gap — Principle VI).
+    """
+
+    def __init__(self, store_id: str) -> None:
+        super().__init__(
+            f"store {store_id!r} has no configured ERPNext Customer — fail-closed → validation "
+            "(F-009: the connector never invents a customer; configure the store→customer map)"
+        )
+        self.store_id = store_id
+
+
+class StoreCustomerMap:
+    """Applies the operator-configured store→ERPNext-Customer map (fail-closed on a miss)."""
+
+    def __init__(self, by_store: Mapping[str, str]) -> None:
+        self._by_store = dict(by_store)
+
+    def for_store(self, store_id: str) -> str:
+        """Return the ERPNext Customer for ``store_id``; raise :class:`UnmappedStore` if absent.
+
+        No normalization — an unmapped or differently-cased store id fails closed rather than
+        being silently posted to a fallback customer (Principle VI).
+        """
+        try:
+            return self._by_store[store_id]
+        except KeyError:
+            raise UnmappedStore(store_id) from None
+
+
 class MoneyConformanceError(Exception):
     """A built doc carries a non-conformant monetary value (float, missing/invalid currency)."""
 

@@ -1,0 +1,41 @@
+{
+ "actions": [],
+ "creation": "2026-06-06 00:00:00.000000",
+ "description": "One unit→UOM mapping row for Connector Settings (spec 006, FR-008 Option A). Maps a Data-Pulse-2 free-text unit to an ERPNext UOM. Consumed by connector.posting.config.parse_uom_map (fieldnames dp2_unit/erpnext_uom must match the parser).",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "dp2_unit",
+  "erpnext_uom"
+ ],
+ "fields": [
+  {
+   "fieldname": "dp2_unit",
+   "fieldtype": "Data",
+   "label": "DP2 Unit",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "The Data-Pulse-2 free-text SaleLine.unit (e.g. 'each', 'kg'). Case-sensitive — no normalization."
+  },
+  {
+   "fieldname": "erpnext_uom",
+   "fieldtype": "Link",
+   "options": "UOM",
+   "label": "ERPNext UOM",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "The ERPNext UOM this unit maps to (e.g. 'Nos', 'Kg')."
+  }
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-06-06 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Connector",
+ "name": "RT Uom Map Row",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
