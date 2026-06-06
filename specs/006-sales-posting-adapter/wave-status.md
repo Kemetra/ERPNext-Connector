@@ -25,6 +25,41 @@ Corrected the client/poller against the verified served contract (TDD; suite **8
 must always carry status (note: `requests` exposes `.status_code`, the Protocol will adapt). Not yet
 exercised against a live DP2 (Tier 2).
 
+## Live-flow Tier 2 — POSTED-path + Gate G5 VALIDATED end-to-end (2026-06-06)
+
+The happy path is now proven against live systems (completing the live-flow story; reject-path was
+PR #21). Setup: ran ERPNext `setup_complete` on the bench (Company "E2E Co" **abbr E2E** so the
+auto-named `Stores - E2E` warehouse matches the harness; Standard CoA; Fiscal Year 2026; default UOM
+`Nos`), then seeded masters — Customer "E2E Customer" (group Commercial / territory United States),
+Item `TEST-ITEM-01` (stock UOM `Nos`). The harness `posted` mode injects customer/company AFTER
+`build_sales_invoice` (harness-only; builder untouched) and drives `post_work_item` TWICE in-process
+on the SAME work-item — the feed serves only `pending`, so G5 replay must be re-posted, not re-pulled.
+
+**RESULT (verified at BOTH sources, not the harness print):**
+- ERPNext: exactly ONE Sales Invoice `ACC-SINV-2026-00001`, **docstatus=1 (submitted)**, total 19.99,
+  customer E2E Customer, **`rt_source_system=retail_tower_pos`** (the provenance custom fields LANDED
+  on the SI — closes the F-009 audit-linkage concern that earlier sessions could only infer).
+- DP2: row → `posted`, `document_ref={"doctype":"Sales Invoice","name":"ACC-SINV-2026-00001"}` —
+  matches the ERPNext doc the connector posted.
+- **G5 REPLAY-ECHO proven through the REAL flow:** the second in-process post hit the replay guard
+  (`store.get_document_ref` → echo), posting NO duplicate (source SI count = 1); the replay ack also
+  exercised DP2's 200 + `Idempotent-Replayed` path. This is live-flow proof, not just the isolated
+  `FrappePostingLogStore` probe.
+
+**SCOPE — what this does NOT prove (still open; do not read "posted-path validated" as "ready to post"):**
+- **F-009 customer gap is NOT closed.** The connector's `build_sales_invoice` still emits NO
+  customer/company; the SI only submitted because the HARNESS injected one. This proves the connector
+  MACHINERY (build→submit→ack→replay) end-to-end, not that the connector can post in production. The
+  customer-source design decision is still open.
+- **F-002 (crash-window exactly-once) is NOT closed.** G5 here = replay-of-posted ECHO only. A crash
+  BETWEEN `submit()` and `record_posted` would leave no Posting Log row → a re-offer submits a second
+  SI. NOW FIXABLE: the provenance fields are declared + landing on the SI (proven this run), so the
+  ERPNext-side unique key on `rt_external_id` that earlier sessions said was blocked is now possible —
+  the natural next step to actually close G5.
+- **`failed_transient`/retry-budget path** never exercised live (only reject + posted paths were).
+- **Poller config stubs** (`poller.py` NotImplementedError) still unwired → the connector module is
+  inert/unscheduled; this validation is harness-driven, not the scheduled poll.
+
 ## Live-flow Tier 2 — NO-SHIM reject-path e2e VALIDATED end-to-end (2026-06-06, after DP2 #508)
 
 The DP2 contract bug (finding 1 below) was **fixed + merged** — Data-Pulse-2 PR #508 (RED→GREEN;

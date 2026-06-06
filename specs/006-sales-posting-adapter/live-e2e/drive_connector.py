@@ -126,6 +126,34 @@ def main():
     )
     print("OUTCOME=%s" % outcome)
 
+    # --- G5 replay (posted-mode only): drive the SAME wi a SECOND time IN-PROCESS. The feed only
+    # serves `pending` rows, so a re-pull would return nothing — replay must be exercised by
+    # re-posting the same work-item. post_work_item's replay guard (store.get_document_ref(key))
+    # must echo the existing documentRef and post NO second Sales Invoice (Gate G5 — exactly-once).
+    # The second ack reuses key {workItemRef}:posted with the same body → DP2 returns
+    # 200 + Idempotent-Replayed:true (the ack-replay path). Proof is asserted at the ERPNext SOURCE
+    # below: exactly ONE Sales Invoice for this rt_external_id. ----------------------------------
+    if MODE == "posted":
+        if outcome != "posted":
+            raise SystemExit("FAILED: posted-mode first post returned %r, expected 'posted'" % outcome)
+        replay_outcome = frappe_glue.post_work_item(
+            wi, client=client, store=store, uom_map=uom_map,
+            warehouses=warehouses, correlation_id=correlation_id,
+        )
+        print("REPLAY_OUTCOME=%s" % replay_outcome)
+        if replay_outcome != "posted":
+            raise SystemExit("FAILED: G5 replay returned %r, expected 'posted' (echo)" % replay_outcome)
+        # Source-of-truth G5 assertion: exactly ONE Sales Invoice for this sale's external_id.
+        import frappe  # available under bench execute
+        si_count = frappe.db.count("Sales Invoice", {"rt_external_id": wi.external_id})
+        print("SALES_INVOICES_FOR_%s=%d (expect exactly 1)" % (wi.external_id, si_count))
+        if si_count != 1:
+            raise SystemExit(
+                "FAILED: G5 violated — %d Sales Invoices for rt_external_id=%s (expected exactly 1; "
+                "the replay must echo, never post a duplicate)." % (si_count, wi.external_id)
+            )
+        print("=== G5 OK: replay echoed the documentRef; exactly one Sales Invoice exists ===")
+
     # Confirm DP2 recorded the outcome (the feed should no longer offer this ref).
     after = client.pull_postings(since=None, limit=100)
     still = any(i.work_item_ref == wi.work_item_ref for i in after.items)
