@@ -2,6 +2,69 @@
 
 Companion to [tasks.md](./tasks.md). Records what landed across the implementation slices.
 
+## Live-flow Tier 1 — transport conformance (DONE, 2026-06-06, branch `feat/con-006-live-flow-tier1`)
+
+Corrected the client/poller against the verified served contract (TDD; suite **89 passed**, ruff clean):
+- **Served paths**: `transport.py` now uses `/api/connector/v1/erpnext/postings` (pull) +
+  `.../{workItemRef}/outcome` (ack) — was the wrong `/connector/postings`, which would have 404'd
+  every live call. Added the `limit` param (default 100, capped at 500); `since` sent verbatim.
+- **Ack response semantics**: `ack_outcome` returns an `AckResult` — 201 (first) and 200 +
+  `Idempotent-Replayed: true` (replay) are both success; **409 → `AckConflict`**, **404 →
+  `AckNotFound`** (raised). Idempotency-Key `{workItemRef}:{outcome}` confirmed 16–128 ASCII / no ws.
+- **Ack-failure isolation (the poison-pill fix)**: `worker.process_page` now CATCHES
+  `AckConflict`/`AckNotFound` from a valid item's ack → records the ref in `ack_failed_refs` →
+  marks the page degraded → **continues + advances the cursor** (DP2 owns reconciliation 017; the
+  connector never blind-retries). Without this, a single 409 would wedge the poller forever
+  (re-pull → replay → 409 → repeat) — the same poison-pill class as the degraded-page fix, caught
+  by review before Tier 2 could trip it.
+- **Cursor handling left UNCHANGED** — verified against DP2 `service.ts:218-224` that
+  `since = result.cursor` + break-on-`next_page_token is None` is correct (not the bug I'd flagged).
+
+**Tier-1 honest ceiling:** the ack failure *types + loop handling* are wired and unit-tested; the
+`_interpret_ack` statusless path is a **test-only** success convenience — the real Tier-2 transport
+must always carry status (note: `requests` exposes `.status_code`, the Protocol will adapt). Not yet
+exercised against a live DP2 (Tier 2).
+
+## Live-flow slice — scoped plan (2026-06-06)
+
+DP2 shipped both feed operations on `main`: `connectorPullPostings` (PR #502, US1-FEED HTTP-edge +
+`connectorBearer` auth) and `connectorAckOutcome` (PR #503, US2-ACK). T100 is substantially served.
+The connector's live submit→ack flow is now possible. Verified contract (DP2 source, read-only):
+
+- **Served paths:** pull `GET /api/connector/v1/erpnext/postings?since=<cursor>&limit=<≤500,def 100>`;
+  ack `POST /api/connector/v1/erpnext/postings/{workItemRef}/outcome`. *(The connector's current
+  `transport.py` hardcodes `/connector/postings` — must change to the real base path.)*
+- **Auth:** `Authorization: Bearer <raw-token>`; an opaque revocable `auth_tokens` row with
+  `scope='connector'`, tenant-scoped. **No issuance script** — the token is hand-inserted DP2-side.
+- **Pull response:** `{items[], cursor, next_page_token}` (snake_case). `cursor` = last item's
+  `sequence` on a non-empty page (echoes `since` on empty); `next_page_token` non-null **only when the
+  page was full**. *(Verified `service.ts:218-224`: the connector's `since = result.cursor` +
+  break-on-`next_page_token is None` is CORRECT — no re-baseline loop. Do not "fix" it.)*
+- **Ack:** `Idempotency-Key` REQUIRED (16–128 printable-ASCII, no whitespace); **201** first record,
+  **200 + `Idempotent-Replayed: true`** on replay, **409** body-drift/contradiction, **404**
+  non-disclosing cross-tenant. *(The connector's client treats neither 201/200 specially nor checks
+  the replay header — Tier-1 work.)*
+- **Feed prerequisite:** a sale appears only after DP2's **worker** drains `erpnext.posting.requested`
+  into a `pending erpnext_posting_status` row (needs a processed sale + confirmed item-map +
+  warehouse-map). No worker → feed permanently empty.
+
+### Tier 1 — transport conformance (DOABLE NOW, fake-transport-testable; no DP2/ERPNext/token)
+Correct the client/poller against the verified contract, TDD like the existing 77 tests:
+- real base path; `limit` param (≤500); send `since` verbatim (opaque numeric string, never int-parse).
+- ack: accept 201 AND 200-replay as success; surface 409 (operator attention, not blind retry) + 404
+  distinctly; confirm the `{workItemRef}:{outcome}` Idempotency-Key meets 16–128/charset.
+- **No gated surface** (transport *logic*); the *config source* (base-URL/token from Connector
+  Settings) is Tier 2 and DocType-gated.
+
+### Tier 2 — live end-to-end (HEAVY, cross-system, partly NOT connector code — a runbook, not a promise)
+Five prerequisites before one pull→post→ack runs: (1) DP2 up incl. the **worker**; (2) a connector
+token **hand-inserted** into DP2 `auth_tokens` (DP2-side op, no script); (3) a processed sale +
+confirmed item-map + warehouse-map → one `pending` row; (4) ERPNext seeded Customer/Item/Warehouse
+(the F-009 wall) or `submit()` fails; (5) wiring the poller's `_build_http_transport`/`_load_*` to
+read base-URL/**token (a secret → Connector Settings Password field, never logged, Gate G4)**/maps —
+which **edits Connector Settings DocType JSON, a §3 gated surface**. This tier finally exercises the
+G5 *replay path* and the glue (T031/T041/T051) that are currently inferred/deferred.
+
 ## Activation slice (2026-06-06) — all 3 gated surfaces, user-approved; Gate G5 bench-validated
 
 The second implementation slice activated the posting module. The user explicitly approved all

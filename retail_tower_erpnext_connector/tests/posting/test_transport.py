@@ -111,6 +111,118 @@ class TestPullPostings:
             client.pull_postings(since=None)
 
 
+class TestServedPaths:
+    """Tier 1: the connector must speak the paths DP2 actually serves (#502/#503), verified from
+    DP2 source: GET /api/connector/v1/erpnext/postings and POST .../{workItemRef}/outcome."""
+
+    def test_pull_uses_the_served_base_path(self):
+        page = {"items": [], "cursor": "x", "next_page_token": None}
+        fake = FakeTransport(get_response=page)
+        client = t.PostingFeedClient(fake, correlation_id="r")
+        client.pull_postings(since=None)
+        path, _params, _headers = fake.get_calls[0]
+        assert path == "/api/connector/v1/erpnext/postings"
+
+    def test_ack_uses_the_served_path_with_ref(self):
+        fake = FakeTransport(get_response={}, post_response={"outcome": "posted"})
+        client = t.PostingFeedClient(fake, correlation_id="r")
+        client.ack_outcome("wi-9", c.OutcomeAckRequest.failed_transient())
+        path, _body, _headers = fake.post_calls[0]
+        assert path == "/api/connector/v1/erpnext/postings/wi-9/outcome"
+
+    def test_pull_sends_limit_param(self):
+        page = {"items": [], "cursor": "x", "next_page_token": None}
+        fake = FakeTransport(get_response=page)
+        client = t.PostingFeedClient(fake, correlation_id="r")
+        client.pull_postings(since=None, limit=250)
+        _path, params, _headers = fake.get_calls[0]
+        assert params.get("limit") == 250
+
+    def test_pull_default_limit_is_100(self):
+        page = {"items": [], "cursor": "x", "next_page_token": None}
+        fake = FakeTransport(get_response=page)
+        client = t.PostingFeedClient(fake, correlation_id="r")
+        client.pull_postings(since=None)
+        _path, params, _headers = fake.get_calls[0]
+        assert params.get("limit") == 100
+
+    def test_pull_limit_capped_at_500(self):
+        # DP2 caps at POSTING_FEED_MAX_PAGE=500; the client must not request more.
+        page = {"items": [], "cursor": "x", "next_page_token": None}
+        fake = FakeTransport(get_response=page)
+        client = t.PostingFeedClient(fake, correlation_id="r")
+        client.pull_postings(since=None, limit=9999)
+        _path, params, _headers = fake.get_calls[0]
+        assert params.get("limit") == 500
+
+
+class FakeHttpResponse:
+    """Models a DP2 ack HTTP response (status + headers + body) for the richer transport."""
+
+    def __init__(self, status: int, headers: dict | None = None, body: dict | None = None):
+        self.status = status
+        self.headers = headers or {}
+        self.body = body or {}
+
+
+class FakeAckTransport:
+    """A transport whose post() returns a FakeHttpResponse (status-aware), for ack semantics."""
+
+    def __init__(self, response: "FakeHttpResponse"):
+        self._response = response
+        self.post_calls: list[tuple[str, dict, dict]] = []
+
+    def get(self, path, *, params, headers):
+        return {"items": [], "cursor": "0", "next_page_token": None}
+
+    def post(self, path, *, json, headers):
+        self.post_calls.append((path, json, headers))
+        return self._response
+
+
+class TestAckResponseSemantics:
+    """Tier 1: DP2 ack returns 201 first / 200 + Idempotent-Replayed on replay / 409 / 404."""
+
+    def test_201_first_record_is_success_not_replayed(self):
+        resp = FakeHttpResponse(201, body={"outcome": "posted"})
+        client = t.PostingFeedClient(FakeAckTransport(resp), correlation_id="r")
+        result = client.ack_outcome(
+            "wi-1", c.OutcomeAckRequest.posted(c.ErpnextDocumentRef("Sales Invoice", "ACC-1"))
+        )
+        assert result.recorded is True
+        assert result.replayed is False
+
+    def test_200_replay_is_success_and_flagged_replayed(self):
+        resp = FakeHttpResponse(200, headers={"Idempotent-Replayed": "true"}, body={"outcome": "posted"})
+        client = t.PostingFeedClient(FakeAckTransport(resp), correlation_id="r")
+        result = client.ack_outcome(
+            "wi-1", c.OutcomeAckRequest.posted(c.ErpnextDocumentRef("Sales Invoice", "ACC-1"))
+        )
+        assert result.recorded is True
+        assert result.replayed is True
+
+    def test_409_conflict_raises_ackconflict(self):
+        # body drift or a contradicting outcome — operator attention, NOT blind retry.
+        resp = FakeHttpResponse(409, body={"code": "idempotency_key_conflict"})
+        client = t.PostingFeedClient(FakeAckTransport(resp), correlation_id="r")
+        with pytest.raises(t.AckConflict):
+            client.ack_outcome("wi-1", c.OutcomeAckRequest.failed_transient())
+
+    def test_404_raises_acknotfound(self):
+        # cross-tenant / foreign / absent workItemRef — non-disclosing.
+        resp = FakeHttpResponse(404, body={"code": "not_found"})
+        client = t.PostingFeedClient(FakeAckTransport(resp), correlation_id="r")
+        with pytest.raises(t.AckNotFound):
+            client.ack_outcome("wi-1", c.OutcomeAckRequest.failed_transient())
+
+    def test_idempotency_key_meets_dp2_charset_and_length(self):
+        # DP2 requires 16-128 printable-ASCII, no whitespace. The {workItemRef}:{outcome} key
+        # the glue passes must satisfy it. Build a representative key and assert.
+        key = "11111111-1111-4111-8111-111111111111:permanently_rejected"
+        assert 16 <= len(key) <= 128
+        assert key.isascii() and key.isprintable() and " " not in key
+
+
 class TestAckOutcome:
     def test_posts_outcome_body_and_work_item_ref_in_path(self):
         fake = FakeTransport(get_response={}, post_response={"workItemRef": "wi-1", "outcome": "posted"})

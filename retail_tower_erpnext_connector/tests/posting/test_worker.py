@@ -169,3 +169,60 @@ class TestWorkerReP2b:
         assert recording.acks == [("wi-B", "permanently_rejected", "validation")]
         assert result.degraded is True
         assert result.cursor == "page-1"  # advances even when the whole page was bad
+
+
+class TestAckFailureIsolation:
+    """A 409/404 from a valid item's ack must NOT propagate and wedge the loop (poison-pill).
+
+    Mirrors the re-P2b isolation: the failed item is logged/marked, the page completes degraded,
+    and the cursor advances — DP2 owns reconciliation (017), the connector does not blind-retry.
+    """
+
+    def _page(self):
+        return {
+            "items": [_good_item("A"), _good_item("C")],
+            "cursor": "page-1",
+            "next_page_token": None,
+        }
+
+    def test_ack_conflict_on_a_valid_item_does_not_propagate(self):
+        page = self._page()
+
+        class FakeTransport:
+            def get(self, path, *, params, headers):
+                return page
+
+            def post(self, path, *, json, headers):
+                return {}
+
+        client = t.PostingFeedClient(FakeTransport(), correlation_id="r")
+        recording = RecordingClient()
+
+        def poster(wi):
+            # the live glue's ack can raise AckConflict (409) — must be isolated, not fatal.
+            raise t.AckConflict("idempotency_key_conflict")
+
+        result = w.process_page(client, recording, since=None, post_valid=poster)
+        # the page completes (no propagation), is marked degraded, and the cursor advances
+        assert result.degraded is True
+        assert result.cursor == "page-1"
+        assert set(result.ack_failed_refs) == {"wi-A", "wi-C"}
+
+    def test_ack_not_found_also_isolated(self):
+        page = self._page()
+
+        class FakeTransport:
+            def get(self, path, *, params, headers):
+                return page
+
+            def post(self, path, *, json, headers):
+                return {}
+
+        client = t.PostingFeedClient(FakeTransport(), correlation_id="r")
+        recording = RecordingClient()
+        result = w.process_page(
+            client, recording, since=None,
+            post_valid=lambda wi: (_ for _ in ()).throw(t.AckNotFound("not_found")),
+        )
+        assert result.degraded is True
+        assert result.cursor == "page-1"
