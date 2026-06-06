@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from .contracts import OutcomeAckRequest, PostingWorkItem
+from .contracts import MissingErpnextItemRef, OutcomeAckRequest, PostingWorkItem
 
 # spec-003 substrate: the DP2 request_id correlation travels on every call (Principle V).
 CORRELATION_HEADER = "X-Request-Id"
@@ -44,6 +44,36 @@ class PostingFeedPage:
     """A parsed page of the 012 posting feed (mirrors ``PostingFeedPage``)."""
 
     items: tuple[PostingWorkItem, ...]
+    cursor: str
+    next_page_token: str | None
+
+
+@dataclass(frozen=True)
+class InvalidItem:
+    """A raw feed item that failed to parse — isolated, not aborted (re-P2b).
+
+    ``work_item_ref`` is read directly off the raw item (so the bad item can still be acked
+    by ref even though it never became a :class:`PostingWorkItem`). ``error_kind`` classifies
+    the violation for the rejection reason.
+    """
+
+    work_item_ref: str
+    error_kind: str
+    message: str
+    raw: dict
+
+
+@dataclass(frozen=True)
+class RawFeedPage:
+    """A page split into successfully-parsed items and isolated invalid ones (re-P2b).
+
+    The page is NEVER aborted on a bad line: valid items parse and post, invalid items are
+    surfaced for per-item rejection, and the caller raises a page-degraded alert AFTER
+    recording every per-item outcome.
+    """
+
+    items: tuple[PostingWorkItem, ...]
+    invalid: tuple[InvalidItem, ...]
     cursor: str
     next_page_token: str | None
 
@@ -79,6 +109,56 @@ class PostingFeedClient:
             raise ValueError("posting feed page missing required non-empty cursor (012)")
         return PostingFeedPage(
             items=items,
+            cursor=str(cursor),
+            next_page_token=(
+                None if raw.get("next_page_token") is None else str(raw["next_page_token"])
+            ),
+        )
+
+    def pull_postings_raw(self, *, since: str | None) -> RawFeedPage:
+        """``connectorPullPostings`` — pull a page, isolating unparseable items (re-P2b).
+
+        Unlike :meth:`pull_postings` (which aborts the whole page on a bad line), this parses
+        each item independently: a line missing ``erpnextItemRef`` (or any parse failure) becomes
+        an :class:`InvalidItem` rather than aborting valid siblings. The caller acks each invalid
+        item ``permanently_rejected``/``validation`` and raises a page-degraded alert AFTER.
+        """
+        params: dict = {}
+        if since is not None:
+            params["since"] = since
+        raw = self._transport.get(_PULL_PATH, params=params, headers=self._headers())
+
+        items: list[PostingWorkItem] = []
+        invalid: list[InvalidItem] = []
+        for entry in raw.get("items", []):
+            try:
+                items.append(PostingWorkItem.from_wire(entry))
+            except MissingErpnextItemRef as exc:
+                invalid.append(
+                    InvalidItem(
+                        work_item_ref=str(entry.get("workItemRef", "")),
+                        error_kind="missing_erpnext_item_ref",
+                        message=str(exc),
+                        raw=entry,
+                    )
+                )
+            except (ValueError, KeyError, TypeError) as exc:
+                # Any other malformed item is also isolated, not page-aborting (re-P2b).
+                invalid.append(
+                    InvalidItem(
+                        work_item_ref=str(entry.get("workItemRef", "")),
+                        error_kind="malformed_work_item",
+                        message=str(exc),
+                        raw=entry,
+                    )
+                )
+
+        cursor = raw.get("cursor")
+        if not cursor:
+            raise ValueError("posting feed page missing required non-empty cursor (012)")
+        return RawFeedPage(
+            items=tuple(items),
+            invalid=tuple(invalid),
             cursor=str(cursor),
             next_page_token=(
                 None if raw.get("next_page_token") is None else str(raw["next_page_token"])

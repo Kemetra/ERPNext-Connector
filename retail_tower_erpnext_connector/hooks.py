@@ -15,13 +15,42 @@ app_license = "mit"
 required_apps = ["erpnext"]
 
 # -----------------------------------------------------------------------------
-# Foundation scope (spec 001): this app registers NO document-event handlers,
-# NO scheduled jobs, and NO overrides that create, update, or delete product,
-# stock, price, or sales data. See the project constitution, Principle VII
-# (.specify/memory/constitution.md) and spec FR-005.
-#
-# doc_events, scheduler_events, override_doctype_class, etc. are intentionally
-# left unset at the foundation layer. They are introduced by later specs
-# (003 auth, 004 product export, 005 inventory, 006 sales posting) against
-# their own reviewed contracts.
+# Foundation scope (spec 001) registered NO hooks. Spec 006 (sales posting),
+# against its reviewed contracts, introduces the first runtime registrations:
+#   - fixtures: provenance Custom Fields on Sales Invoice (audit linkage +
+#     idempotency key; F-009 — frappe silently drops undeclared fields).
+#   - scheduler_events: the posting poller (pull -> post -> ack).
+# No doc_events / override_doctype_class are registered (the connector posts via
+# its own scheduled worker; it does not intercept ERPNext document events).
+# See the constitution (Principle VII) and specs/006-sales-posting-adapter/.
 # -----------------------------------------------------------------------------
+
+# Export ONLY the connector's own provenance Custom Fields (scoped by name), never the
+# whole Custom Field table — so fixtures sync touches nothing else on the site.
+fixtures = [
+	{
+		"dt": "Custom Field",
+		"filters": [
+			[
+				"name",
+				"in",
+				[
+					"Sales Invoice-rt_source_system",
+					"Sales Invoice-rt_external_id",
+					"Sales Invoice-rt_sale_ref",
+				],
+			]
+		],
+	}
+]
+
+# The posting poller — pulls posting work-items from Data-Pulse-2, posts each to ERPNext,
+# and acks the outcome (T093). The job entrypoint lives in the posting module. Interval is
+# conservative; tune per operational load.
+scheduler_events = {
+	"cron": {
+		"*/5 * * * *": [
+			"retail_tower_erpnext_connector.connector.posting.poller.run_posting_poll",
+		]
+	}
+}

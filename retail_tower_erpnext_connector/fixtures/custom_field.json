@@ -1,0 +1,46 @@
+[
+ {
+  "doctype": "Custom Field",
+  "name": "Sales Invoice-rt_source_system",
+  "dt": "Sales Invoice",
+  "fieldname": "rt_source_system",
+  "label": "RT Source System",
+  "fieldtype": "Data",
+  "length": 100,
+  "insert_after": "naming_series",
+  "read_only": 1,
+  "no_copy": 1,
+  "print_hide": 1,
+  "translatable": 0,
+  "description": "Data-Pulse-2 sourceSystem provenance (012 posting feed). Set by the Retail Tower connector; part of the (rt_source_system, rt_external_id) idempotency key. Do not edit."
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Sales Invoice-rt_external_id",
+  "dt": "Sales Invoice",
+  "fieldname": "rt_external_id",
+  "label": "RT External Id",
+  "fieldtype": "Data",
+  "length": 200,
+  "insert_after": "rt_source_system",
+  "read_only": 1,
+  "no_copy": 1,
+  "print_hide": 1,
+  "translatable": 0,
+  "description": "Data-Pulse-2 externalId provenance (012 posting feed). With rt_source_system forms the idempotency key the connector maps to this document. Do not edit."
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Sales Invoice-rt_sale_ref",
+  "dt": "Sales Invoice",
+  "fieldname": "rt_sale_ref",
+  "label": "RT Sale Ref",
+  "fieldtype": "Data",
+  "insert_after": "rt_external_id",
+  "read_only": 1,
+  "no_copy": 1,
+  "print_hide": 1,
+  "translatable": 0,
+  "description": "Data-Pulse-2 saleRef (008 sale id) audit linkage from this ERPNext Sales Invoice back to the DP2 sale fact (FR-012). Do not edit."
+ }
+]

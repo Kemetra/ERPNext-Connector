@@ -80,13 +80,33 @@ class TestFoundationNoMutationNoFork(unittest.TestCase):
 					f"forbidden at foundation (FR-005, constitution VII)",
 				)
 
-	def test_app_registers_no_business_mutation_hooks(self):
-		"""No doc_events / scheduler_events / overrides are registered by this app."""
+	def test_app_registers_no_event_intercept_or_override_hooks(self):
+		"""No doc_events / override_doctype_class are registered (FR-005, constitution VII).
+
+		The connector never intercepts ERPNext document events or overrides core classes — it
+		posts via its OWN scheduled worker against the reviewed 012 contract. As of spec 006 the
+		app DOES register a `scheduler_events` posting poller and `fixtures` (its provenance
+		Custom Fields); those are reviewed, contract-bound registrations, so they are no longer
+		"forbidden" — only event-interception / class-override remain forbidden.
+		"""
 		hooks = frappe.get_hooks(app_name=APP_NAME)
-		for forbidden in ("doc_events", "scheduler_events", "override_doctype_class"):
+		for forbidden in ("doc_events", "override_doctype_class", "override_whitelisted_methods"):
 			self.assertFalse(
 				hooks.get(forbidden),
-				f"Foundation app must register no '{forbidden}' (FR-005, constitution VII)",
+				f"Connector must register no '{forbidden}' (FR-005, constitution VII)",
+			)
+
+	def test_scheduler_events_only_register_the_posting_poller(self):
+		"""Spec 006: the only scheduled job is the documented posting poller — nothing else."""
+		hooks = frappe.get_hooks(app_name=APP_NAME)
+		scheduler = hooks.get("scheduler_events") or {}
+		registered = _flatten_scheduler_jobs(scheduler)
+		self.assertTrue(registered, "the posting poller scheduler_event must be registered (spec 006)")
+		for job in registered:
+			self.assertIn(
+				"posting.poller",
+				job,
+				f"Unexpected scheduled job '{job}' — only the posting poller is allowed (spec 006)",
 			)
 
 	def test_app_does_not_fork_erpnext(self):
@@ -142,6 +162,31 @@ def _first(value):
 	if isinstance(value, (list, tuple)):
 		return value[0] if value else None
 	return value
+
+
+def _flatten_scheduler_jobs(scheduler):
+	"""Collect every job dotted-path string from a scheduler_events hook, at any nesting.
+
+	The hook can be ``{"cron": {"*/5 * * * *": [job, ...]}}`` (cron — a dict of cron-expr → jobs)
+	or ``{"hourly": [job, ...]}`` (interval — a list of jobs), and ``frappe.get_hooks`` may
+	list-wrap values. Recurse, treating only str leaves as jobs (so cron-expression KEYS are never
+	mistaken for jobs — the bug Codex caught: iterating ``dict.values()`` once yielded the cron dict,
+	then iterating that yielded its expression keys).
+	"""
+	jobs: list[str] = []
+
+	def _walk(node):
+		if isinstance(node, str):
+			jobs.append(node)
+		elif isinstance(node, dict):
+			for v in node.values():
+				_walk(v)
+		elif isinstance(node, (list, tuple)):
+			for v in node:
+				_walk(v)
+
+	_walk(scheduler)
+	return jobs
 
 
 if __name__ == "__main__":
