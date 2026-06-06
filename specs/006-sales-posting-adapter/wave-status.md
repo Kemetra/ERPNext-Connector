@@ -31,7 +31,7 @@ User-authorized for this slice (the "i authorize" instruction serves as the sign
 | T050/T052 | `connector/posting/reasons.py` | `test_reasons.py` (13) | closed-set mapper (raises, never invents); secret-scrub |
 | T070/T071/T072 | `connector/posting/uom.py` | `test_uom.py` (11) | Option-A UOM map (fail-closed); pre-resolved warehouse; money conformance |
 
-**Verification (this machine):** `pytest` 70 passed; coverage 94–100% on each core module
+**Verification (this machine):** `pytest` 73 passed; coverage 94–100% on each core module
 (`frappe_glue.py` shows 0% — un-runnable locally, by design); `ruff` clean; `py_compile` clean.
 
 ## Code review (independent) — all 12 findings addressed
@@ -137,3 +137,31 @@ is fixed here (one is bench-coupled, the other is an open spec tension) — reco
 **End-to-end is therefore NOT achievable on this machine** — it requires the DP2 live feed and a
 staging bench. This slice delivers the verifiable, frappe-free core; the remainder is correctly
 deferred behind the bench and the two forbidden-surface gates.
+
+## Bench import-check (2026-06-06) — modules load under real frappe; NOT 006 validation
+
+A dev ERPNext v15 bench was found in WSL (`frappe_docker` devcontainers; site `retail.localhost`,
+apps `frappe` + `erpnext` v15 + the connector). T101's "staging bench" is therefore **partly
+satisfied** (it exists), though connector validation is not. The 006 posting code was copied into the
+bench app copy (the bench has its OWN git lineage, disconnected from GitHub — a `docker cp`, not a
+pull) and `bench migrate` ran clean (006 adds no DocType/patch). What this **did** and **did not**
+establish:
+
+- ✅ **All 7 posting modules import cleanly under real frappe** — including `frappe_glue.py` (the
+  `import frappe` module the local host structurally cannot run). No import-time errors.
+- ⚠️ **Finding — `_transient_exceptions()` names were partly guessed.** Under real frappe v15 it
+  resolved to `['QueryTimeoutError', 'TimeoutError']`: frappe has `QueryTimeoutError` but **not**
+  `TimedOutError` / `RetryBackoffError` (two names guessed from memory). The `getattr`-guard degraded
+  gracefully (no bug), but the transient-exception set must be **pinned against real frappe v15** when
+  the glue is properly tested (Codex-re-P2a is in the same area). Open TODO for the glue-test slice.
+- ❌ **No 006 tests ran on the bench.** `bench run-tests` (unittest discovery) aborts on collection:
+  the core tests are pytest-style and `pytest` is not installed in the bench container
+  (`ModuleNotFoundError: No module named 'pytest'`). So the bench confirmed *imports*, not behavior.
+- ❌ **The glue is still unvalidated and the module is dormant** (`hooks.py` empty — nothing executes
+  it on the bench either). Real glue validation remains a **net-new slice**: glue tests (fake
+  transport) + seeded `Customer`/`Item`/`Warehouse` fixtures (the F-009 wall) + DP2 for the live loop
+  (T100). The bench existing makes that slice *runnable*; it does not shrink it.
+
+**Accurate ceiling:** "the bench exists and the modules import under real frappe" — true and useful,
+but it is **not** "006 is bench-validated." T031/T032/T041/T051 stay deferred to the glue-test +
+fixture slice; the live loop stays deferred to DP2 (T100).
