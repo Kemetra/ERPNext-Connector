@@ -63,6 +63,42 @@ def _transient_exceptions() -> tuple[type[BaseException], ...]:
     return (*found, TimeoutError)
 
 
+def _dup_provenance_exceptions() -> tuple[type[BaseException], ...]:
+    """Exceptions a duplicate Sales Invoice `(rt_source_system, rt_external_id)` insert raises (G5/F-002).
+
+    The `unique_rt_si_provenance` index on Sales Invoice (patch sales_invoice_unique_provenance)
+    makes a SECOND submit of an already-posted sale fail at the DB. On bench frappe v15 this surfaces
+    as **UniqueValidationError** (a ValidationError subclass — verified on the bench, NOT guessed);
+    DuplicateEntryError is included defensively (the Posting Log path raises that one). getattr-guarded
+    so a frappe missing a name degrades rather than errors. This MUST be caught BEFORE the generic
+    `frappe.ValidationError` handler, or a legitimate crash-recovery would be FALSELY rejected.
+    """
+    names = ("UniqueValidationError", "DuplicateEntryError")
+    return tuple(
+        exc for exc in (getattr(frappe.exceptions, n, None) for n in names) if exc is not None
+    ) or (Exception,)
+
+
+def _find_posted_invoice(work_item: PostingWorkItem) -> ErpnextDocumentRef | None:
+    """Resolve the already-submitted Sales Invoice for this sale's provenance (G5/F-002 recovery).
+
+    Looks up by the `(rt_source_system, rt_external_id)` idempotency anchor — a hit IS the same
+    logical sale. Returns the document_ref to echo, or None if no submitted SI exists.
+    """
+    name = frappe.db.get_value(
+        "Sales Invoice",
+        {
+            "rt_source_system": work_item.source_system,
+            "rt_external_id": work_item.external_id,
+            "docstatus": 1,
+        },
+        "name",
+    )
+    if not name:
+        return None
+    return ErpnextDocumentRef(doctype="Sales Invoice", name=name)
+
+
 def post_work_item(
     work_item: PostingWorkItem,
     *,
@@ -133,6 +169,32 @@ def post_work_item(
         )
         _log_signal("posting.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
         return "failed_transient"
+    except _dup_provenance_exceptions() as exc:
+        # GATE G5 / F-002 — the crash-window recovery. The `unique_rt_si_provenance` index rejected
+        # a SECOND submit of an already-posted sale (a crash between the FIRST submit and
+        # record_posted left no Posting Log row, so the replay guard above found nothing). This is
+        # NOT a rejection: a matching SI already exists. Resolve to it (echo its documentRef), back-
+        # fill the Posting Log so future re-offers fast-path through the replay guard, and fall
+        # through to the normal `posted` ack. Catching this BEFORE frappe.ValidationError is load-
+        # bearing — UniqueValidationError ⊂ ValidationError, so the generic handler would otherwise
+        # FALSELY reject a legitimately-posted sale (Principle VI inversion).
+        existing = _find_posted_invoice(work_item)
+        if existing is None:
+            # Dup index fired but no SI found under our provenance — genuinely unexpected; do not
+            # fabricate success. Treat as a non-retryable error (never a silent partial).
+            return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
+        document_ref = existing
+        try:
+            store.record_posted(key, document_ref)  # back-fill the missing Posting Log row
+        except IdempotencyConflict as conflict:
+            document_ref = conflict.existing
+        client.ack_outcome(
+            work_item.work_item_ref,
+            OutcomeAckRequest.posted(document_ref),
+            idempotency_key=_ack_key(work_item, "posted"),
+        )
+        _log_signal("posting.recovered", work_item, correlation_id, document_ref=document_ref.name)
+        return "posted"
     except frappe.ValidationError as exc:  # type: ignore[attr-defined]
         # T051 — validation failure → permanently_rejected / validation.
         return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
@@ -143,13 +205,11 @@ def post_work_item(
     # Record the posting, then ack. A concurrent double-record (another worker recorded a
     # different ref for this key first) is resolved by echoing the recorded ref.
     #
-    # ⚠️ KNOWN OPEN WINDOW (F-002, NOT closed here): a crash BETWEEN submit and record_posted
-    # leaves no record, so a DP2 re-offer would submit a SECOND invoice (the replay_guard finds
-    # nothing). IdempotencyConflict only catches concurrent double-record, NOT this crash window.
-    # The real fix is ERPNext-side dedup — a unique key on (rt_source_system, rt_external_id),
-    # which requires those provenance custom fields to be DECLARED (the deferred custom-field
-    # gate, see wave-status) — or a pre-submit pending-record. Deferred to T020 + that gate;
-    # the interim slice does NOT yet guarantee exactly-once against a crash (Gate G5 open).
+    # F-002 (the crash-BETWEEN-submit-and-record window) is now CLOSED by the
+    # `unique_rt_si_provenance` index on Sales Invoice + the `_dup_provenance_exceptions` recovery
+    # above: if a crash here leaves no Posting Log row, a DP2 re-offer's second submit fails on the
+    # unique index, is caught, and resolves to the existing SI (no duplicate). Gate G5 holds against
+    # both concurrent double-record (this IdempotencyConflict echo) and the crash window.
     try:
         store.record_posted(key, document_ref)
     except IdempotencyConflict as conflict:
