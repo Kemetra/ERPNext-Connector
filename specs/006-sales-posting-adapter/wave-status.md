@@ -50,6 +50,20 @@ the validated behavior + the two fixed bugs have a durable regression guard (fra
 seeded Customer/Item/Warehouse masters + DP2 serving the feed, T100). Codex-re-P2a
 (closed_period/unmapped_account granularity) remains a bench-glue TODO.
 
+### Codex review of #19 (commit `43666d8`) — 2 findings, both fixed + bench-verified
+
+- **Codex-P1 (custom field length).** `rt_external_id` Custom Field on Sales Invoice was left at the
+  default `varchar(140)` while `Posting Log.external_id` was fixed to 200 — the same truncation bug on
+  the sibling field (a >140 externalId would truncate on the invoice → lost provenance / failed
+  insert). Fixed: `rt_external_id` length 200, `rt_source_system` 100. Bench-confirmed the column
+  synced.
+- **Codex-P2 (scheduler-test flatten bug).** `test_scheduler_events_only_register_the_posting_poller`
+  iterated `scheduler.values()` once over `{"cron": {expr: [job]}}`, so it collected the **cron
+  expression** as a "job" and would fail on any real bench (`Unexpected scheduled job '*/5 * * * *'`).
+  This is the concrete instance of the "never executed" caveat below. Fixed with a recursive
+  `_flatten_scheduler_jobs` (str leaves only) — and this time the helper's logic was **executed on the
+  bench** against the real hook shape: it returns the poller path, no cron-expr leaks.
+
 **Test-execution caveat (honest):** `test_foundation.py` was edited to permit `scheduler_events`
 (the poller) + add `test_scheduler_events_only_register_the_posting_poller`. That file is bench-only
 and **`bench run-tests` aborts on collection** (`import pytest` in the posting tests; pytest isn't

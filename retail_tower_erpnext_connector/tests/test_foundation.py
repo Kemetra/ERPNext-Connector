@@ -100,7 +100,8 @@ class TestFoundationNoMutationNoFork(unittest.TestCase):
 		"""Spec 006: the only scheduled job is the documented posting poller — nothing else."""
 		hooks = frappe.get_hooks(app_name=APP_NAME)
 		scheduler = hooks.get("scheduler_events") or {}
-		registered = [job for jobs in scheduler.values() for job in (jobs or [])]
+		registered = _flatten_scheduler_jobs(scheduler)
+		self.assertTrue(registered, "the posting poller scheduler_event must be registered (spec 006)")
 		for job in registered:
 			self.assertIn(
 				"posting.poller",
@@ -161,6 +162,31 @@ def _first(value):
 	if isinstance(value, (list, tuple)):
 		return value[0] if value else None
 	return value
+
+
+def _flatten_scheduler_jobs(scheduler):
+	"""Collect every job dotted-path string from a scheduler_events hook, at any nesting.
+
+	The hook can be ``{"cron": {"*/5 * * * *": [job, ...]}}`` (cron — a dict of cron-expr → jobs)
+	or ``{"hourly": [job, ...]}`` (interval — a list of jobs), and ``frappe.get_hooks`` may
+	list-wrap values. Recurse, treating only str leaves as jobs (so cron-expression KEYS are never
+	mistaken for jobs — the bug Codex caught: iterating ``dict.values()`` once yielded the cron dict,
+	then iterating that yielded its expression keys).
+	"""
+	jobs: list[str] = []
+
+	def _walk(node):
+		if isinstance(node, str):
+			jobs.append(node)
+		elif isinstance(node, dict):
+			for v in node.values():
+				_walk(v)
+		elif isinstance(node, (list, tuple)):
+			for v in node:
+				_walk(v)
+
+	_walk(scheduler)
+	return jobs
 
 
 if __name__ == "__main__":
