@@ -71,16 +71,30 @@ def _build_posting_path():
     UOM map, and the pre-resolved warehouse map — then binds frappe_glue.post_work_item to them.
     Finalised at bench time (reads Connector Settings + signed decisions).
     """
+    from .config import require_configured_maps
     from .frappe_glue import post_work_item  # local import: glue imports frappe-only symbols
     from .transport import PostingFeedClient
-    from .uom import PreResolvedWarehouse, UomMap
+    from .uom import PreResolvedWarehouse, StoreCustomerMap, UomMap
 
     correlation_id = frappe.generate_hash(length=16)
-    transport = _build_http_transport()  # auth-backed HTTP client to DP2 (spec 003)
+    settings = frappe.get_doc("Connector Settings")  # one read; child tables + Password live here
+
+    # Parse the maps, then GATE: a fully-empty required map means the connector is not yet
+    # configured (every work-item has a store + >=1 line, so an empty map would 100%-reject). Raise
+    # so run_posting_poll catches it → posting.poll.skipped, sales stay pending — NOT mass-rejected
+    # to DP2's DLQ (Codex PR #23 P1). A populated-but-incomplete map is NOT gated here: a specific
+    # absent key is a genuine per-item terminal rejection downstream (decision-table rows 5/8).
+    uom = _load_uom_map(settings)
+    warehouse = _load_warehouse_map(settings)
+    customer = _load_store_customer_map(settings)
+    require_configured_maps(uom=uom, warehouse=warehouse, customer=customer)
+
+    transport = _build_http_transport(settings)  # auth-backed HTTP client to DP2 (spec 003)
     client = PostingFeedClient(transport, correlation_id=correlation_id)
     store = FrappePostingLogStore()
-    uom_map = UomMap(_load_uom_map())
-    warehouses = PreResolvedWarehouse(_load_warehouse_map())
+    uom_map = UomMap(uom)
+    warehouses = PreResolvedWarehouse(warehouse)
+    customers = StoreCustomerMap(customer)  # F-009
 
     def post_valid(work_item) -> None:
         post_work_item(
@@ -89,28 +103,89 @@ def _build_posting_path():
             store=store,
             uom_map=uom_map,
             warehouses=warehouses,
+            customers=customers,
             correlation_id=correlation_id,
         )
 
     return client, post_valid
 
 
-# --- bench-time wiring stubs (read Connector Settings / signed decisions) --------------------
-# These are intentionally thin; their concrete bodies are finalised against the live site at
-# bench validation. They raise until configured, so run_posting_poll() skips cleanly (logged)
-# rather than posting with half-configured dependencies.
+# --- Connector Settings wiring ---------------------------------------------------------------
+# These read the Connector Settings single DocType (base-URL + token + the three mapping child
+# tables). A missing base-URL/token raises, which run_posting_poll() catches → logs
+# `posting.poll.skipped` and skips the tick (no posting with a half-configured connector). The
+# pure parse logic lives in config.py (unit-tested locally); these are the thin frappe shell.
 
 
-def _build_http_transport():
-    raise NotImplementedError("HTTP transport to DP2 is wired from Connector Settings at bench time")
+class _Resp:
+    """Status-aware response wrapper so PostingFeedClient._interpret_ack can read 201/200/409/404."""
+
+    def __init__(self, r) -> None:
+        self.status = r.status_code
+        self.headers = dict(r.headers)
+        try:
+            self.body = r.json()
+        except Exception:
+            self.body = {}
 
 
-def _load_uom_map() -> dict:
-    raise NotImplementedError("unit→UOM map is loaded from the signed decision at bench time")
+class _RequestsTransport:
+    """Concrete HttpTransport to DP2 over the spec-003 connectorBearer (Authorization: Bearer).
+
+    Bench-only (imports ``requests``, carries the secret token). GET raises for HTTP errors; POST
+    returns a status-aware :class:`_Resp` so the client distinguishes 201/200-replay/409/404.
+    """
+
+    def __init__(self, base: str, token: str) -> None:
+        self._base = base.rstrip("/")
+        self._auth = {"Authorization": "Bearer " + token}
+
+    def get(self, path: str, *, params: dict, headers: dict) -> dict:
+        import requests
+
+        r = requests.get(
+            self._base + path, params=params, headers={**self._auth, **headers}, timeout=30
+        )
+        r.raise_for_status()
+        return r.json()
+
+    def post(self, path: str, *, json: dict, headers: dict):
+        import requests
+
+        r = requests.post(
+            self._base + path, json=json, headers={**self._auth, **headers}, timeout=30
+        )
+        return _Resp(r)
 
 
-def _load_warehouse_map() -> dict:
-    raise NotImplementedError("store→warehouse map is loaded at bench time")
+def _build_http_transport(settings) -> _RequestsTransport:
+    """Construct the auth-backed transport from Connector Settings (Gate G4 — token via get_password).
+
+    Raises if base-URL or token is unset, so the tick skips cleanly rather than posting blind.
+    """
+    base_url = (settings.dp2_base_url or "").strip()
+    token = settings.get_password("dp2_token")  # decrypted; never get_single_value (masks it)
+    if not base_url or not token:
+        raise ValueError("Connector Settings: dp2_base_url and dp2_token are required")
+    return _RequestsTransport(base_url, token)
+
+
+def _load_uom_map(settings) -> dict:
+    from .config import parse_uom_map
+
+    return parse_uom_map(settings.uom_map)
+
+
+def _load_warehouse_map(settings) -> dict:
+    from .config import parse_warehouse_map
+
+    return parse_warehouse_map(settings.warehouse_map)
+
+
+def _load_store_customer_map(settings) -> dict:
+    from .config import parse_store_customer_map
+
+    return parse_store_customer_map(settings.store_customer_map)
 
 
 def _load_cursor() -> str | None:

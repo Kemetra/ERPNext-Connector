@@ -55,6 +55,36 @@ class TestWarehouseApplier:
             applier.for_store("unknown-store")
 
 
+class TestStoreCustomerMap:
+    # F-009 closure: the 012 work-item carries no customer identity, only Sale.store_id. The
+    # operator maps each store to its ERPNext Customer (config, injected) — exactly parallel to
+    # the warehouse map. A store with no mapping fails CLOSED (never fabricate a customer —
+    # Principle VI), mapped by the caller to permanently_rejected / validation.
+    def test_maps_known_store_to_customer(self):
+        resolver = u.StoreCustomerMap(
+            {"33333333-3333-4333-8333-333333333333": "Walk-in Customer - RT"}
+        )
+        assert resolver.for_store("33333333-3333-4333-8333-333333333333") == "Walk-in Customer - RT"
+
+    def test_unmapped_store_fails_closed(self):
+        # No default customer — an unmapped store raises UnmappedStore (caller → validation),
+        # never silently posts to some fallback customer (would hide a config gap; Principle VI).
+        resolver = u.StoreCustomerMap({})
+        with pytest.raises(u.UnmappedStore):
+            resolver.for_store("unknown-store")
+
+    def test_for_store_is_the_builder_customer_callable(self):
+        # The resolver plugs directly into build_sales_invoice's customer_for slot.
+        resolver = u.StoreCustomerMap({"s1": "C1"})
+        assert callable(resolver.for_store)
+
+    def test_map_is_case_sensitive_explicit(self):
+        # No silent normalization — store ids are opaque; a differently-cased id fails closed.
+        resolver = u.StoreCustomerMap({"Store-A": "C1"})
+        with pytest.raises(u.UnmappedStore):
+            resolver.for_store("store-a")
+
+
 class TestMoneyConformance:
     def test_passes_clean_invoice(self):
         doc = {
@@ -116,6 +146,9 @@ class TestMoneyConformance:
             uom_for=u.UomMap({"each": "Nos"}).resolve,
             warehouse_for=u.PreResolvedWarehouse(
                 {"33333333-3333-4333-8333-333333333333": {"doctype": "Warehouse", "name": "Main - RT"}}
+            ).for_store,
+            customer_for=u.StoreCustomerMap(
+                {"33333333-3333-4333-8333-333333333333": "Walk-in Customer - RT"}
             ).for_store,
         )
         u.assert_money_conformance(doc)

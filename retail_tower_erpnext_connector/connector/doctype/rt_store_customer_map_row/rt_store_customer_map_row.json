@@ -1,0 +1,42 @@
+{
+ "actions": [],
+ "creation": "2026-06-06 00:00:00.000000",
+ "description": "One store→customer mapping row for Connector Settings (spec 006, F-009 closure). The 012 work-item carries no customer; the operator maps each store to its ERPNext Customer. Consumed by connector.posting.config.parse_store_customer_map (fieldnames store_id/customer must match the parser). A store with no row fails closed (UnmappedStore → validation) — the connector never fabricates a customer (Principle VI).",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "store_id",
+  "customer"
+ ],
+ "fields": [
+  {
+   "fieldname": "store_id",
+   "fieldtype": "Data",
+   "label": "DP2 Store Id",
+   "reqd": 1,
+   "length": 200,
+   "in_list_view": 1,
+   "description": "The Data-Pulse-2 Sale.storeId (opaque UUID). Case-sensitive."
+  },
+  {
+   "fieldname": "customer",
+   "fieldtype": "Link",
+   "options": "Customer",
+   "label": "ERPNext Customer",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "The ERPNext Customer that sales from this store post against."
+  }
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-06-06 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Connector",
+ "name": "RT Store Customer Map Row",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

@@ -1,0 +1,42 @@
+{
+ "actions": [],
+ "creation": "2026-06-06 00:00:00.000000",
+ "description": "One store→warehouse mapping row for Connector Settings (spec 006, FR-010 rider R5). Applies the DP2-pre-resolved warehouse for a store; the connector never derives one. Consumed by connector.posting.config.parse_warehouse_map (fieldnames store_id/warehouse must match the parser).",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "store_id",
+  "warehouse"
+ ],
+ "fields": [
+  {
+   "fieldname": "store_id",
+   "fieldtype": "Data",
+   "label": "DP2 Store Id",
+   "reqd": 1,
+   "length": 200,
+   "in_list_view": 1,
+   "description": "The Data-Pulse-2 Sale.storeId (opaque UUID). Case-sensitive."
+  },
+  {
+   "fieldname": "warehouse",
+   "fieldtype": "Link",
+   "options": "Warehouse",
+   "label": "ERPNext Warehouse",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "The ERPNext Warehouse name this store posts stock against."
+  }
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-06-06 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Connector",
+ "name": "RT Warehouse Map Row",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

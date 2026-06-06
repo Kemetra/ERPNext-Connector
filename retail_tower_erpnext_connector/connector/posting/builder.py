@@ -41,15 +41,22 @@ def build_sales_invoice(
     *,
     uom_for: Callable[[str], str],
     warehouse_for: Callable[[str], dict],
+    customer_for: Callable[[str], str],
 ) -> dict:
     """Build the ERPNext Sales-Invoice payload for one ``sale_post`` work-item.
 
     ``uom_for(unit) -> erpnext_uom`` resolves the signed unit→UOM map (raises
     :class:`UnmappedUnit` on a miss). ``warehouse_for(store_id) -> {doctype, name}`` returns
     the DP2-pre-resolved warehouse identity (rider R5; never guessed by this builder).
+    ``customer_for(store_id) -> customer`` resolves the operator-configured store→Customer map
+    (F-009; raises :class:`uom.UnmappedStore` on a miss — the builder NEVER fabricates a
+    customer, which would hide a config gap; Principle VI).
     """
     sale = work_item.sale
     warehouse = warehouse_for(sale.store_id)
+    # F-009: the 012 work-item carries no customer identity — only Sale.store_id. The operator
+    # maps each store to its ERPNext Customer (config, injected) exactly as for the warehouse.
+    customer = customer_for(sale.store_id)
 
     items = []
     for line in sale.lines:
@@ -66,14 +73,14 @@ def build_sales_invoice(
             }
         )
 
-    # NOTE (deferred bench dependency — F-009): a real ERPNext Sales Invoice also requires a
-    # `customer` (and effectively `company` / `debit_to`). The DP2 012 work-item carries no
-    # customer identity yet — the customer/company injection source is an OPEN gap that must be
-    # resolved before bench validation (T031); until then a real submit will raise
-    # ValidationError (correctly → permanently_rejected / validation, never a silent partial).
-    # The interim slice does not fabricate a customer (that would hide the gap — Principle VI).
+    # F-009 CLOSED: the customer is resolved from the operator-configured store→Customer map
+    # (above), never fabricated. The 012 work-item carries no customer; the operator owns the
+    # mapping, identical to the UOM and warehouse maps. `company` is left to ERPNext's default
+    # company (single-company sites); a multi-company store→company mapping is a future extension
+    # if needed — but the customer is the field that actually blocks submit on a configured bench.
     doc = {
         "doctype": "Sales Invoice",
+        "customer": customer,
         "currency": sale.currency_code,
         # businessDate drives the fiscal period — never the connector's post-time (T033).
         "posting_date": sale.business_date,
