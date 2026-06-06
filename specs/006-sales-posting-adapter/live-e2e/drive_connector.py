@@ -104,8 +104,13 @@ def main():
     page = client.pull_postings(since=None, limit=100)
     print("PULLED items=%d cursor=%s next=%s" % (len(page.items), page.cursor, page.next_page_token))
     if not page.items:
-        print("NO ITEMS — nothing to post (seed missing or already terminal). Aborting.")
-        return
+        # FAIL LOUD: a run that pulls nothing validated nothing. Exiting 0 here would let an
+        # operator record a green "validation" that never pulled/posted/acked (the seed was not
+        # applied, or the row is already terminal). Raise so the harness exits nonzero.
+        raise SystemExit(
+            "FAILED: feed returned 0 pending items — nothing was validated. "
+            "Apply dp2-seed.sql (fresh posting id) before running."
+        )
 
     wi = page.items[0]
     print("WORK ITEM ref=%s kind=%s lines=%d item0=%s" % (
@@ -125,7 +130,16 @@ def main():
     after = client.pull_postings(since=None, limit=100)
     still = any(i.work_item_ref == wi.work_item_ref for i in after.items)
     print("DP2 feed still offers this ref after ack? %s (expect False)" % still)
-    print("=== DONE: outcome=%s, feed_cleared=%s ===" % (outcome, not still))
+    if still:
+        # FAIL LOUD: the terminal ack did NOT remove the work-item from DP2's pending feed, so the
+        # terminal transition the runbook claims was NOT validated (e.g. a stale-key 409 isolated by
+        # the worker, or the row never transitioned). Do not print DONE and exit 0 — raise.
+        raise SystemExit(
+            "FAILED: outcome=%s but DP2 still offers %s as pending — the terminal transition was "
+            "NOT recorded (likely a stale ack idempotency key; re-seed with a fresh posting id)."
+            % (outcome, wi.work_item_ref)
+        )
+    print("=== DONE: outcome=%s, feed_cleared=True ===" % outcome)
 
 
 # `bench execute ...drive_connector.main` imports this module and calls main() itself — the guard
