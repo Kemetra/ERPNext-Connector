@@ -25,6 +25,22 @@ Corrected the client/poller against the verified served contract (TDD; suite **8
 must always carry status (note: `requests` exposes `.status_code`, the Protocol will adapt). Not yet
 exercised against a live DP2 (Tier 2).
 
+## Live-flow Tier 2 — NO-SHIM reject-path e2e VALIDATED end-to-end (2026-06-06, after DP2 #508)
+
+The DP2 contract bug (finding 1 below) was **fixed + merged** — Data-Pulse-2 PR #508 (RED→GREEN;
+`projection.ts` now emits the 012 `{doctype:"Item",name}` object; 9 suites/59 tests green incl. the
+served HTTP-edge). With #508 on DP2 `main`, the live e2e was **re-run with the harness shim REMOVED**:
+DP2 `main` (api rebuilt) serves the object on the real wire (curl-confirmed
+`{"doctype":"Item","name":"TEST-ITEM-01"}`); against a FRESH sale/posting row (clean idempotency key)
+the connector pulled + **parsed DP2's real object wire with NO compensation** → built the SI → submit
+failed (bare bench) → acked `permanently_rejected/validation` → **DP2 recorded it** (verified at
+source: row `7c7c…` → `permanently_rejected/validation`). This closes the prior caveat ("the connector
+parsed a SHIMMED payload, not DP2's real output") and PR #21's unchecked "re-run without the shim"
+item. The single most important integration point is now validated against the real contract, no shim.
+(An intermediate re-run on the OLD workItemRef hit a 409 from a session-stale idempotency key; the
+connector's `worker.process_page` correctly ISOLATED it per the documented poison-pill fix — not a
+defect, a contaminated re-seed; resolved by using a fresh sale.)
+
 ## Live-flow Tier 2 — reject-path e2e VALIDATED (2026-06-06, live DP2 main + WSL ERPNext bench)
 
 The first true cross-system live round-trip ran end-to-end. Setup: WSL `.wslconfig` memory bump

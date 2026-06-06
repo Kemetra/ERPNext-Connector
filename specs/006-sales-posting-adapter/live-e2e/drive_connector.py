@@ -29,19 +29,9 @@ from retail_tower_erpnext_connector.connector.posting.transport import PostingFe
 from retail_tower_erpnext_connector.connector.posting.frappe_store import FrappePostingLogStore
 from retail_tower_erpnext_connector.connector.posting.uom import UomMap, PreResolvedWarehouse
 
-def _shim_dp2_erpnext_item_ref(body):
-    """HARNESS-ONLY compensation for a DP2 015 contract bug (see memory
-    dp2-erpnextitemref-contract-bug): DP2 serves `erpnextItemRef` as a bare string, but the 012
-    contract requires an object {doctype:"Item", name}. The connector is correct; DP2 is wrong.
-    We wrap the string HERE (transport boundary), so the connector's contracts.py stays untouched
-    and still fail-closes on a genuinely malformed ref. Remove once DP2 serves the object shape.
-    """
-    for item in body.get("items", []) or []:
-        for line in (item.get("sale") or {}).get("lines", []) or []:
-            ref = line.get("erpnextItemRef")
-            if isinstance(ref, str):
-                line["erpnextItemRef"] = {"doctype": "Item", "name": ref}
-    return body
+# NOTE: a temporary _shim_dp2_erpnext_item_ref() used to wrap DP2's bare-string `erpnextItemRef`
+# into the 012 object {doctype,name} (issue #506). REMOVED once DP2 PR #508 merged — DP2 now serves
+# the correct object shape, so the connector parses the REAL wire with no compensation.
 
 
 class _Resp:
@@ -68,8 +58,7 @@ class RequestsTransport:
             self._base + path, params=params, headers={**self._auth, **headers}, timeout=15
         )
         r.raise_for_status()
-        body = r.json()
-        return _shim_dp2_erpnext_item_ref(body)
+        return r.json()  # DP2 serves the contract-correct erpnextItemRef object (post-#508)
 
     def post(self, path, *, json, headers):
         # Return a status-aware object so PostingFeedClient._interpret_ack can read 201/200/409/404.
