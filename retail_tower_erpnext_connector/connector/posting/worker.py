@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .contracts import OutcomeAckRequest, RejectionReason
-from .transport import PostingFeedClient
+from .transport import AckConflict, AckNotFound, PostingFeedClient
 
 # Operational: a page that processed but contained ≥1 contract-violating item. Raised AFTER all
 # per-item outcomes are acked, so it signals "feed is degraded, fix upstream" without losing work.
@@ -46,10 +46,12 @@ class PageDegraded(Exception):
 class PageResult:
     """Outcome of processing one pull page.
 
-    ``degraded`` is True when the page carried ≥1 contract-violating item (all of which were acked
-    `permanently_rejected` before this result was returned). The cursor still advances on a degraded
-    page — every item reached a terminal outcome, so re-pulling would be a forbidden retry (re-P2b).
-    ``degraded_message`` is the operational-alert text the caller logs (None when not degraded).
+    ``degraded`` is True when the page carried ≥1 contract-violating item (acked
+    `permanently_rejected`) OR ≥1 item whose ack DP2 rejected (409/404 — `ack_failed_refs`). The
+    cursor always advances on a degraded page — every item reached a terminal disposition, so
+    re-pulling would be a forbidden retry (re-P2b). ``degraded_message`` is the operational-alert
+    text the caller logs (None when not degraded). ``ack_failed_refs`` are posted-but-ack-rejected
+    items that DP2's reconciliation (017) owns — the connector does not retry them.
     """
 
     cursor: str
@@ -58,6 +60,7 @@ class PageResult:
     rejected_refs: tuple[str, ...]
     degraded: bool
     degraded_message: str | None = None
+    ack_failed_refs: tuple[str, ...] = ()
 
 
 def process_page(
@@ -80,8 +83,20 @@ def process_page(
     page = client.pull_postings_raw(since=since)
 
     # 1. Post every valid work item (the happy path; each is independently idempotent).
+    #    An AckConflict (409) / AckNotFound (404) from a valid item's ack is ISOLATED, not fatal:
+    #    DP2 owns reconciliation (017); the connector must NOT blind-retry or let one item wedge the
+    #    loop (the same poison-pill class as a degraded page). Collect the ref, mark degraded, go on
+    #    — every item still reaches a terminal disposition, so the cursor advances.
+    ack_failed_refs: list[str] = []
+    posted_count = 0
     for work_item in page.items:
-        post_valid(work_item)
+        try:
+            post_valid(work_item)
+            posted_count += 1
+        except (AckConflict, AckNotFound):
+            # isolate: the item posted (or replayed) but its ack was rejected by DP2 → a
+            # reconciliation case (017), not a connector retry. Record the ref and continue.
+            ack_failed_refs.append(work_item.work_item_ref)
 
     # 2. Ack each invalid item as a terminal per-item rejection — no substitution, no resolution.
     rejected_refs: list[str] = []
@@ -102,15 +117,21 @@ def process_page(
     #    advance — re-pulling would be the forbidden page-level retry of already-acked items
     #    (re-P2b: "no page-level retry... emits an operational alert"). The caller logs the alert
     #    and advances. ``degraded_message`` is the alert text when degraded.
+    degraded = bool(page.invalid) or bool(ack_failed_refs)
+    parts: list[str] = []
+    if page.invalid:
+        parts.append(_MISSING_REF_MESSAGE.format(n=len(rejected_refs), refs=", ".join(rejected_refs)))
+    if ack_failed_refs:
+        parts.append(
+            f"{len(ack_failed_refs)} item(s) posted but their ack was rejected by DP2 "
+            f"(409/404 — reconciliation case 017, NOT retried): {', '.join(ack_failed_refs)}"
+        )
     return PageResult(
         cursor=page.cursor,
         next_page_token=page.next_page_token,
-        posted_count=len(page.items),
+        posted_count=posted_count,
         rejected_refs=tuple(rejected_refs),
-        degraded=bool(page.invalid),
-        degraded_message=(
-            _MISSING_REF_MESSAGE.format(n=len(rejected_refs), refs=", ".join(rejected_refs))
-            if page.invalid
-            else None
-        ),
+        ack_failed_refs=tuple(ack_failed_refs),
+        degraded=degraded,
+        degraded_message="; ".join(parts) if parts else None,
     )
