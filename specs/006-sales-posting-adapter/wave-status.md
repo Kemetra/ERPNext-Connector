@@ -25,6 +25,44 @@ Corrected the client/poller against the verified served contract (TDD; suite **8
 must always carry status (note: `requests` exposes `.status_code`, the Protocol will adapt). Not yet
 exercised against a live DP2 (Tier 2).
 
+## Gate G5 / F-002 — crash-window exactly-once CLOSED (2026-06-06, bench-validated RED→GREEN)
+
+The crash-between-submit-and-record window (F-002) is closed by a coordinated two-part fix, proven
+on the configured bench with a three-state probe (`live-e2e/bench-f002-probe.py`):
+1. **[GATED] Sales Invoice unique index** — `patches/sales_invoice_unique_provenance.py` adds
+   `unique_rt_si_provenance` on `tabSales Invoice (rt_source_system, rt_external_id)` (MariaDB
+   multi-NULL → manual SIs unaffected; only connector SIs deduped). User-approved gated surface.
+2. **`frappe_glue` crash-recovery** — catch the dup-key on submit BEFORE the generic
+   `frappe.ValidationError` (the index raises **`UniqueValidationError` ⊂ ValidationError** — CAPTURED
+   on the bench via a diag probe, NOT guessed; ordering is load-bearing or a legit recovery would be
+   FALSELY rejected) → `_find_posted_invoice((rt_source_system,rt_external_id,docstatus=1))` → back-fill
+   the Posting Log → ack `posted` (echo), logged `posting.recovered`.
+
+**Three-state bench proof:** no-index → **2 SIs** (RED, F-002 reproduced); index-only →
+`UniqueValidationError` → would false-reject (proves part 2 necessary); index+catch → **1 SI, posted
+echo** (GREEN). Regression: the normal posted-path + G5 replay-echo still pass with the index. Local
+suite 89 passed.
+
+**Honest scope of the closure (proven-vs-inferred):**
+- **Regression guard is MANUAL.** The new glue paths (`_dup_provenance_exceptions`,
+  `_find_posted_invoice`, the recovery branch) have NO automated test — `frappe_glue` is
+  un-importable locally (the 89-pass suite never touches it) and the probe can't run under
+  `bench run-tests`. Guarded only by the manual `bench-f002-probe.py` (same precedent as
+  `bench-g5-probe.py`). "Closed" = closed + manually-probe-guarded, NOT CI-protected.
+- **What the probe modeled:** a FULL completed post (incl. the first ack) then Posting-Log deletion —
+  so the recovery re-ack hit DP2's 200-replay path. Duplicate-PREVENTION is proven for the post-submit
+  window regardless. **Residual edge (narrower, NOT a regression):** a crash strictly between
+  `insert()` and `submit()` leaves a `docstatus=0` DRAFT in the unique slot; a re-offer's dup-key then
+  finds no `docstatus=1` SI → `_reject(OTHER)` + an orphan draft. Not closed here; logged as a known
+  residual. The `docstatus=1` filter in `_find_posted_invoice` is CORRECT (never echo a draft) — do
+  not "simplify" it away.
+- **FORWARD CONSTRAINT for the reversal slice (012 kind=reversal, unbuilt):** an ERPNext credit note
+  IS a Sales Invoice (`is_return=1`). The unique index spans ALL SIs, so the reversal builder MUST
+  write the reversal work-item's OWN `external_id` into `rt_external_id` (the 012 work-item carries a
+  distinct top-level `externalId`, separate from `reversalOf.externalId`) — NOT the original sale's —
+  or it will collide with the original SI and be falsely treated as a dup-recovery. If linking to the
+  original is needed, add an `is_return` discriminator to the index. Verify when building reversal.
+
 ## Live-flow Tier 2 — POSTED-path + Gate G5 VALIDATED end-to-end (2026-06-06)
 
 The happy path is now proven against live systems (completing the live-flow story; reject-path was
