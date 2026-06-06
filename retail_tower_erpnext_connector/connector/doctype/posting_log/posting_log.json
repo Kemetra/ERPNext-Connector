@@ -1,0 +1,105 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-06-06 00:00:00.000000",
+ "description": "Idempotency + audit log for ERPNext sales postings (connector spec 006). One row per posted Data-Pulse-2 sale, keyed on (source_system, external_id) — the 012 O-3 wire idempotency anchor. The unique index on that pair is what makes posting exactly-once (Gate G5): a replay resolves to the recorded document_ref instead of creating a second ERPNext document.",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "source_system",
+  "external_id",
+  "column_break_idem",
+  "document_doctype",
+  "document_name",
+  "section_break_meta",
+  "sale_ref",
+  "outcome",
+  "correlation_id"
+ ],
+ "fields": [
+  {
+   "fieldname": "source_system",
+   "fieldtype": "Data",
+   "label": "Source System",
+   "reqd": 1,
+   "length": 100,
+   "in_list_view": 1,
+   "description": "DP2 sourceSystem (012 provenance, maxLength 100). Part of the idempotency key."
+  },
+  {
+   "fieldname": "external_id",
+   "fieldtype": "Data",
+   "label": "External Id",
+   "reqd": 1,
+   "length": 200,
+   "in_list_view": 1,
+   "description": "DP2 externalId (012 provenance, maxLength 200 — NOT the default 140, to avoid truncating a long id into a false duplicate). With source_system forms the unique replay key."
+  },
+  {
+   "fieldname": "column_break_idem",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "document_doctype",
+   "fieldtype": "Data",
+   "label": "Document DocType",
+   "description": "The posted ERPNext document's doctype (e.g. \"Sales Invoice\"). Generic {doctype, name} addressing (Principle II)."
+  },
+  {
+   "fieldname": "document_name",
+   "fieldtype": "Data",
+   "label": "Document Name",
+   "in_list_view": 1,
+   "description": "The posted ERPNext document's name. Echoed back to DP2 on an idempotent duplicate posted ack."
+  },
+  {
+   "fieldname": "section_break_meta",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "sale_ref",
+   "fieldtype": "Data",
+   "label": "Sale Ref",
+   "description": "DP2 saleRef (008 sale id) — audit linkage."
+  },
+  {
+   "fieldname": "outcome",
+   "fieldtype": "Data",
+   "label": "Outcome",
+   "description": "The recorded terminal outcome (posted)."
+  },
+  {
+   "fieldname": "correlation_id",
+   "fieldtype": "Data",
+   "label": "Correlation Id",
+   "description": "DP2 request_id correlation (spec 003 substrate)."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-06-06 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Connector",
+ "name": "Posting Log",
+ "naming_rule": "Random",
+ "autoname": "hash",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

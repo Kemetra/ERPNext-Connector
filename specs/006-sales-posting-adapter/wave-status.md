@@ -1,9 +1,69 @@
-# 006 — Wave Status (first impl slice: pure-Python core)
+# 006 — Wave Status
 
-Companion to [tasks.md](./tasks.md); the sign-off + status record T092 designates. Records what
-the first implementation slice landed, what is authored-but-deferred, and the gate stops. This
-slice implements the **pure-Python core only** — the frappe-coupled glue is authored but
-bench-deferred, and the **three** forbidden-surface dependencies are hard-stopped pending
+Companion to [tasks.md](./tasks.md). Records what landed across the implementation slices.
+
+## Activation slice (2026-06-06) — all 3 gated surfaces, user-approved; Gate G5 bench-validated
+
+The second implementation slice activated the posting module. The user explicitly approved all
+three §3 forbidden surfaces (`hooks.py`, the `posting_log` DocType JSON + migration, the
+custom-field fixture). Landed:
+
+- **A — re-P2b worker loop** (`connector/posting/worker.py`, `transport.pull_postings_raw`): the
+  ratified hybrid isolate-and-ack-then-raise-after. A feed line missing `erpnextItemRef` is acked
+  `permanently_rejected`/`validation` per-item; valid items on the page still post; a
+  `PageDegraded` alert is raised AFTER all per-item outcomes are recorded. No item is ever
+  resolved/substituted. Local RED→GREEN (4 tests).
+- **C — provenance custom fields** (`fixtures/custom_field.json` + `hooks.py` `fixtures`, scoped by
+  name): `rt_source_system`/`rt_external_id`/`rt_sale_ref` declared on Sales Invoice — closes F-009
+  (frappe no longer silently drops them). Bench-confirmed present.
+- **B — `posting_log` DocType + migration + store adapter** (DocType JSON, `patches/posting_log_unique_idem.py`,
+  `connector/posting/frappe_store.py`): a composite **UNIQUE index on `(source_system, external_id)`**.
+  **This closes Gate G5** — exactly-once posting at the DB level.
+- **D — poller** (`connector/posting/poller.py` + `hooks.py` `scheduler_events` cron): the scheduled
+  pull→post→ack entrypoint (T093). Config-wiring stubs raise `NotImplementedError` so the poll
+  **skips cleanly until bench-configured** (no half-configured posting). Module is now NON-dormant.
+
+**Gate G5 — the dedup MECHANISM is bench-validated** on a real frappe v15 bench (WSL
+`retail.localhost`, `bench migrate` + a runtime probe of `FrappePostingLogStore` in isolation),
+not merely migrated. **Precise claim:** `record_posted`/`get_document_ref`/conflict/truncation are
+exercised and pass; the *replay path through* `post_work_item` (replay_guard → echo existing
+`documentRef`) is **inferred, not exercised** — it needs the DP2 client (T100). The probe caught and
+the slice fixed **two runtime-only bugs** that migrate/import checks could not:
+
+1. `frappe_store` caught `UniqueValidationError`, but a duplicate actually raises
+   **`DuplicateEntryError`** on frappe v15 — the `except` caught the wrong exception (the race-path
+   echo would have failed). Fixed: catch both (getattr-guarded), verified the dup-key path now
+   raises `IdempotencyConflict` (echo the recorded ref, no duplicate document).
+2. `external_id` was the default `varchar(140)` vs the 012 contract's **maxLength 200**, and the
+   `format:` autoname made the primary key truncate too — two distinct long sale-ids would collide
+   into a **false duplicate** (a valid sale silently rejected; Principle VI inversion). Fixed:
+   `external_id` length 200, `source_system` 100, **autoname → `hash`** (dedup is purely the
+   composite index). Bench-verified: two ids differing only past char 140 both record.
+
+All 11 posting modules import cleanly under real frappe. Local suite **77 passed**, ruff clean.
+
+The G5 probe is saved as a re-runnable bench script ([bench-g5-probe.py](./bench-g5-probe.py)) so
+the validated behavior + the two fixed bugs have a durable regression guard (frappe's
+`bench run-tests` cannot run it — see the test caveat below).
+
+**Still deferred (NOT claimed validated):** the live submit→ack flow (poller config stubs +
+seeded Customer/Item/Warehouse masters + DP2 serving the feed, T100). Codex-re-P2a
+(closed_period/unmapped_account granularity) remains a bench-glue TODO.
+
+**Test-execution caveat (honest):** `test_foundation.py` was edited to permit `scheduler_events`
+(the poller) + add `test_scheduler_events_only_register_the_posting_poller`. That file is bench-only
+and **`bench run-tests` aborts on collection** (`import pytest` in the posting tests; pytest isn't
+in the bench container) — so the new foundation assertions have **not executed** anywhere. The
+local pytest suite (77) does not import frappe, so it never runs `test_foundation.py` either. A
+follow-up should make the connector tests runnable under one runner (install pytest in the bench, or
+port the foundation/posting tests to unittest) so these guarantees actually execute.
+
+---
+
+## First impl slice — pure-Python core
+
+This slice implemented the **pure-Python core only** — the frappe-coupled glue was authored but
+bench-deferred, and the **three** forbidden-surface dependencies were hard-stopped pending
 explicit approval.
 
 ## Sign-offs (T001–T003) — recorded

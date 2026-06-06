@@ -4,3 +4,5 @@
 
 [post_model_sync]
 # Patches added in this section will be executed after doctypes are migrated
+# spec 006: composite UNIQUE on Posting Log (source_system, external_id) — Gate G5 exactly-once.
+retail_tower_erpnext_connector.patches.posting_log_unique_idem
