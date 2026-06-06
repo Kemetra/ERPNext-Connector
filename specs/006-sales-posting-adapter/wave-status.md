@@ -25,6 +25,55 @@ Corrected the client/poller against the verified served contract (TDD; suite **8
 must always carry status (note: `requests` exposes `.status_code`, the Protocol will adapt). Not yet
 exercised against a live DP2 (Tier 2).
 
+## Live-flow Tier 2 — reject-path e2e VALIDATED (2026-06-06, live DP2 main + WSL ERPNext bench)
+
+The first true cross-system live round-trip ran end-to-end. Setup: WSL `.wslconfig` memory bump
+(6.7→9.7 GiB; the bench was OOM-exit-137); DP2 015 feed/ack MERGED to `main` via **PR #505**
+(api run as a pnpm process, dev Postgres/Redis healthy); a `pending` `sale_post` row direct-seeded
+into `dp2-postgres-dev` (tenant→store→user→tenant_product→sale→sale_line→**confirmed** item-map
+`TEST-ITEM-01`→**active** warehouse-map→pending posting-status) + a `connector`-scoped `auth_tokens`
+row (raw token presented; server stores `sha256(raw)` bytea). Bench: `retail.localhost`, connector
+app code re-synced from `main` (the bench copy was a STALE `docker cp` with the old
+`/connector/postings` path — corrected to `/api/connector/v1/erpnext/postings`). The connector was
+driven by a bench-console harness (`specs/006-.../live-e2e/drive_connector.py`) constructing
+`PostingFeedClient` (real `requests` transport) + `FrappePostingLogStore` + `UomMap` +
+`PreResolvedWarehouse` inline and calling `frappe_glue.post_work_item` — NOT the gated poller stubs
+(user declined wiring the §3 Connector Settings DocType).
+
+**RESULT (verified at the DP2 source, not the script's print):**
+`erpnext_posting_status` for the work-item → `status=permanently_rejected`,
+`rejection_category=validation`, `document_ref=NULL`. The full loop is exercised: DP2 serve →
+connector pull (connectorBearer; 401 without token) → 012 parse → `build_sales_invoice` →
+`frappe.get_doc().insert()/submit()` → `frappe.ValidationError` → `frappe_glue` maps to
+`permanently_rejected/validation` → `connectorAckOutcome` → DP2 `applyRejected` recorded it.
+Crucially the ack took the **real status-aware 201 path** (`_interpret_ack` saw an HTTP status),
+closing the Tier-1 honesty gap (the `_interpret_ack` statusless path was test-only). Re-pull
+confirms the feed no longer offers the ref.
+
+**PROVEN vs INFERRED — the first exception was CAPTURED (not guessed):** a probe ran
+`frappe.get_doc(built_doc).insert()` and printed the unscrubbed error. It is
+**`frappe.exceptions.LinkValidationError: Could not find Row #1: UOM: Nos, Row #1: Warehouse:
+Stores - E2E`** — the BARE-BENCH unsatisfied master links, NOT the F-009 customer/company wall (the
+masters fail first, before any mandatory-customer check). `LinkValidationError` ⊂
+`frappe.ValidationError`, so `frappe_glue:136` correctly mapped it to `validation`. **What this
+proves:** the connector maps an ERPNext `ValidationError` → `permanently_rejected/validation` and
+acks it over the live status-aware path. **What it does NOT prove:** the specific F-009 customer gap
+(submit failed earlier on the missing UOM/Warehouse Items) — that needs the posted-path with a
+configured bench. Earlier wording here ("missing customer/company") was inferred and is corrected.
+
+**TWO findings from the live run:**
+1. **DP2 015 contract bug (DP2-side, read-only here):** the feed serves `erpnextItemRef` as a BARE
+   STRING (`projection.ts:40,171`), but the 012 `posting-feed.yaml` `ErpnextItemRef` is
+   `type:object,required:[doctype,name]`. The connector is CORRECT (raised `AttributeError` on the
+   real payload); DP2 violates its own contract. The connector's 28/28-passing unit tests + DP2's
+   28/28 conformance both missed it (schema/fixtures in isolation, not the live projection) — the
+   exact value of Tier-2. Compensated by a HARNESS-ONLY shim (wrap string→{doctype,name} at the
+   transport boundary; connector `contracts.py` untouched, still fail-closes). **DP2 must fix on its
+   015 feature.** (memory: dp2-erpnextitemref-contract-bug)
+2. **Bench is a BARE ERPNext install** — 0 Company/Customer/Item/Warehouse/Fiscal-Year/UOM (setup
+   wizard never ran). The reject-path proves the loop regardless; the **posted-path** needs full
+   ERPNext company setup (Company + CoA + fiscal year) before a real SI can submit — assessed next.
+
 ## Live-flow slice — scoped plan (2026-06-06)
 
 DP2 shipped both feed operations on `main`: `connectorPullPostings` (PR #502, US1-FEED HTTP-edge +
