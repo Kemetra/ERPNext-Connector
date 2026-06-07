@@ -1,22 +1,37 @@
+<div align="center">
+
+<img src="docs/assets/brand/connector-logo.svg" alt="Retail Tower ERPNext Connector logo" width="120" height="120"/>
+
 # Retail Tower ERPNext Connector
 
-Custom Frappe / ERPNext connector app for integrating **Retail Tower OS** with **ERPNext** through **Data-Pulse-2**.
+**The ERPNext-facing integration layer for Retail Tower OS — the only component allowed to touch ERPNext.**
 
-This repository is the ERPNext-side integration layer for Retail Tower OS. It adapts ERPNext/Frappe business documents, APIs, and configuration into stable integration contracts consumed by Data-Pulse-2.
+Custom Frappe / ERPNext app that adapts ERPNext business documents, APIs, and configuration into
+stable contracts consumed by Data-Pulse-2.
+
+![Platform](https://img.shields.io/badge/platform-Frappe%20%2F%20ERPNext%20v15-0e7490)
+![Boundary](https://img.shields.io/badge/boundary-Data--Pulse--2%20only-7c3aed)
+![Status](https://img.shields.io/badge/status-foundation%20shipped%20%C2%B7%20003%20auth%20drafted-b45309)
+![Mutation](https://img.shields.io/badge/ERP%20mutation-none%20yet-1e293b)
+![License](https://img.shields.io/badge/license-internal-555)
+
+</div>
 
 ---
 
 ## Purpose
 
-Retail Tower OS uses ERPNext as the ERP, accounting, and inventory reference system, but ERPNext does not replace the Retail Tower operational applications.
+Retail Tower OS uses ERPNext as its ERP, accounting, and inventory reference system — but ERPNext
+does **not** replace the Retail Tower operational applications. This connector keeps the ERPNext
+integration isolated, versioned, testable, and upgrade-safe.
 
-The target integration rule is:
+The target integration rule is one direction, through one boundary:
 
-POS-Pulse             -> Data-Pulse-2 -> Retail Tower ERPNext Connector -> ERPNext / Frappe
-Retail-Tower-Console -> Data-Pulse-2 -> Retail Tower ERPNext Connector -> ERPNext / Frappe
-ERPNext POS behavior -> Reference only
-
-This connector keeps ERPNext integration isolated, versioned, testable, and upgrade-safe.
+```text
+POS-Pulse             ──▶  Data-Pulse-2  ──▶  Retail Tower ERPNext Connector  ──▶  ERPNext / Frappe
+Retail-Tower-Console  ──▶  Data-Pulse-2  ──▶  Retail Tower ERPNext Connector  ──▶  ERPNext / Frappe
+ERPNext POS behavior  ──▶  Reference only
+```
 
 ---
 
@@ -35,6 +50,23 @@ and acks the outcome. It never forks ERPNext, copies its core, or exports catalo
 Data-Pulse-2  ──▶  Retail Tower ERPNext Connector  ──▶  ERPNext / Frappe
 ```
 
+### Where the Connector sits — the full ecosystem
+
+The diagram below places the connector within the complete five-repository Retail Tower OS
+ecosystem: the **Retail Tower Orchestrator** control-plane band on top, governing the four
+delivery repos beneath it. POS-Pulse and Retail-Tower-Console both synchronize through
+Data-Pulse-2, the single contract boundary, which alone reaches ERPNext through this connector.
+
+<p align="center">
+  <img src="docs/assets/architecture/retail-tower-ecosystem.svg" alt="Retail Tower OS ecosystem diagram: an Orchestrator control-plane band over five repositories, with POS-Pulse and Retail-Tower-Console synchronizing through Data-Pulse-2 to the ERPNext Connector and ERPNext" width="100%"/>
+</p>
+
+<p align="center">
+  <em>The ERPNext Connector — <strong>this repository</strong> — is the highlighted ERPNext-facing node
+  (gold ★ THIS REPO badge). The diagram is a live animated SVG that honors
+  <code>prefers-reduced-motion</code> for accessibility.</em>
+</p>
+
 Full detail (posting flow + sequence): [docs/architecture/synchronization.md](docs/architecture/synchronization.md) ·
 Program control plane: [Retail-Tower-Orchestrator](https://github.com/ahmed-shaaban-94/Retail-Tower-Orchestrator).
 
@@ -42,11 +74,7 @@ Program control plane: [Retail-Tower-Orchestrator](https://github.com/ahmed-shaa
 
 ## Repository Role
 
-This repository owns the custom Frappe app:
-
-retail_tower_erpnext_connector
-
-It is responsible for:
+This repository owns the custom Frappe app `retail_tower_erpnext_connector`, responsible for:
 
 - ERPNext / Frappe custom app foundation.
 - Connector settings and integration configuration.
@@ -79,19 +107,22 @@ Non-goals:
 
 ## Architecture Boundary
 
-Retail Tower OS keeps operational control in Data-Pulse-2.
+Retail Tower OS keeps operational control in Data-Pulse-2. There is no direct path from
+POS-Pulse or Retail-Tower-Console to ERPNext.
 
+```text
 POS-Pulse
-  -> Data-Pulse-2
-    -> Retail Tower ERPNext Connector
-      -> ERPNext / Frappe
+  └─▶ Data-Pulse-2
+        └─▶ Retail Tower ERPNext Connector
+              └─▶ ERPNext / Frappe
 
 Retail-Tower-Console
-  -> Data-Pulse-2
-    -> Retail Tower ERPNext Connector
-      -> ERPNext / Frappe
+  └─▶ Data-Pulse-2
+        └─▶ Retail Tower ERPNext Connector
+              └─▶ ERPNext / Frappe
 
 ERPNext POS behavior = Reference only.
+```
 
 ---
 
@@ -331,6 +362,9 @@ Exit criteria:
 
 ## Suggested Initial Repository Structure
 
+The target docs-and-app layout (some entries are planned, not all present yet):
+
+```text
 .
 ├── README.md
 ├── docs/
@@ -357,6 +391,7 @@ Exit criteria:
 │       └── 008-upgrade-and-compatibility-runbook.md
 └── retail_tower_erpnext_connector/
     └── README.md
+```
 
 ---
 
@@ -388,9 +423,7 @@ via the DP2 `request_id`. It is the **security gate (G4)** that specs 004+ ride 
 dependency (`docs/decisions/connector-token-scope.md`) tracks that DP2 must provision a dedicated
 connector token scope before staging authentication.
 
-Next work item:
-
-004-product-and-price-export
+**Next work item:** `004-product-and-price-export`.
 
 Do not implement catalog, inventory, sales posting, or tax mutation before the relevant
 connector contract is reviewed (constitution Principle VII). **Gate status before 004+:** the
@@ -403,10 +436,13 @@ delivery is pending.
 
 ## Related Repositories
 
-- Data-Pulse-2 — Retail Tower backend, contracts, orchestration, and APIs.
-- POS-Pulse — Windows offline-capable cashier terminal.
-- Retail-Tower-Console — frontend-only admin and operations console.
-- Retail-Tower-ERPNext-Connector — this repository, custom Frappe / ERPNext connector.
+| Repository | Role |
+|---|---|
+| [Retail-Tower-Orchestrator](https://github.com/ahmed-shaaban-94/Retail-Tower-Orchestrator) | Docs-only cross-repo control plane (gates, roadmap, status). |
+| Data-Pulse-2 | Retail Tower backend, contracts, orchestration, and APIs. |
+| POS-Pulse | Windows offline-capable cashier terminal. |
+| Retail-Tower-Console | Frontend-only admin and operations console. |
+| **Retail-Tower-ERPNext-Connector** | **This repository** — custom Frappe / ERPNext connector. |
 
 ---
 
