@@ -51,6 +51,10 @@ scheduler_events = {
 	"cron": {
 		"*/5 * * * *": [
 			"retail_tower_erpnext_connector.connector.posting.poller.run_posting_poll",
+			# The 019 bin-view poller — pulls wanted Bin-view reads from Data-Pulse-2,
+			# reads the live ERPNext Bin on-hand per warehouse, and reports the snapshot
+			# back (feeds the 017 stock reconciliation). On-hand QUANTITY only; no valuation.
+			"retail_tower_erpnext_connector.connector.bin_view.poller.run_bin_view_poll",
 		]
 	}
 }

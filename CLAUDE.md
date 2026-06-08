@@ -30,19 +30,15 @@ governs when in doubt. Profiles: see [docs/agent-os/agent-profiles.yaml](docs/ag
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/004-product-erpnext-item-mapping/plan.md`
+`specs/006-sales-posting-adapter/plan.md`
 
-Active feature: 004 Product–ERPNext Item Mapping (docs/policy only; **reframed** from the
-README's "catalog export from ERPNext" — no such DP2 contract exists, reverse direction barred
-by G4). The connector resolves a posting work-item sale line's `tenantProductRef` to a confirmed
-ERPNext Item via DP2's `erpnext_item_map` (spec 013, migration 0017); CITES `erpnext-item-map.yaml`
-+ `posting-feed.yaml`, does NOT export catalog or re-derive DP2. Spine = fail-closed unresolved
-surfacing (Principle VI): unresolved product → `permanently_rejected`/`unmapped_item`, unmapped UOM
-→ `validation`; ad-hoc line fails closed (signed). NO connector code — resolution lands in spec 006.
-See `.specify/memory/constitution.md`.
-
-Done: 001 Frappe App Foundation (implemented + validated), 002 DocType Mapping Reference
-(merged), 003 Data-Pulse Auth & API Policy (merged). Their plans are under `specs/00{1,2,3}-*/plan.md`.
+Current main state: specs 001-003 are done. Spec 004's product-mapping policy remains historical
+context where relevant, but later spec 006 implementation now carries the active sales-posting
+runtime evidence. Spec 006 sales-posting adapter / poller activation / live-flow work has landed:
+`hooks.py` registers `retail_tower_erpnext_connector.connector.posting.poller.run_posting_poll`
+under `scheduler_events`, and the poller reads Connector Settings for `dp2_base_url`, `dp2_token`,
+the UOM map, warehouse map, and store-customer map. Use
+`specs/006-sales-posting-adapter/wave-status.md` plus GitHub/main as the current evidence.
 
 Data-Pulse-2 backend repo (authoritative reference, read-only):
 `C:\Users\user\Documents\GitHub\Data-Pulse-2`.
