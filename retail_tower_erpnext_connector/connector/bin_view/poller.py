@@ -22,6 +22,7 @@ import frappe
 
 from . import worker
 from .transport import BinViewClient, ReportConflict, ReportNotFound
+from .worker import WindowOverflowError
 
 _LOGGER = "retail_tower_bin_view"
 # Bounded pages per tick — the scheduler re-enters next cron; the report is idempotent
@@ -57,6 +58,14 @@ def run_bin_view_poll() -> None:
                 frappe.logger(_LOGGER).info(
                     {"event": "bin_view.report.stale", "request_ref": request.request_ref,
                      "detail": _safe(str(exc))}
+                )
+            except WindowOverflowError as exc:
+                # The warehouse exceeds the single v1 window — REFUSE to report a
+                # known-incomplete snapshot (no silent truncation). Surface loudly;
+                # the run stays `running` until multi-window support ships.
+                frappe.logger(_LOGGER).error(
+                    {"event": "bin_view.window.overflow", "request_ref": request.request_ref,
+                     "warehouse": request.erpnext_warehouse_ref, "detail": _safe(str(exc))}
                 )
         pages += 1
         _save_cursor(page.cursor)

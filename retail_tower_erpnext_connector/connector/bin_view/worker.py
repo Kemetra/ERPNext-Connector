@@ -30,6 +30,17 @@ from .transport import BinViewClient, ReportResult
 _QTY_QUANTUM = Decimal("0.000001")
 
 
+class WindowOverflowError(Exception):
+    """The warehouse holds MORE Bin items than this request's window can carry.
+
+    v1 issues a single ≤500-item window per warehouse (DP2 does not yet split a
+    >500-item warehouse into multiple windows — that needs DP2 to enumerate the
+    ERPNext item space it cannot see; tracked as a follow-up). Rather than report a
+    KNOWN-INCOMPLETE snapshot as if complete (which would corrupt the 017 run —
+    items beyond the window read as `dp2_only`/absent), the connector REFUSES and
+    surfaces this loudly. No silent truncation (CodeRabbit #528 P1)."""
+
+
 @dataclass(frozen=True)
 class RawBin:
     """One ERPNext ``Bin`` row as read from the warehouse (item_code + on-hand + uom)."""
@@ -99,12 +110,26 @@ def process_request(
 
     Reads on-hand QUANTITY only (no valuation, 019 / Principle IX). The
     ``Idempotency-Key`` is derived from the requestRef so a retry is a safe replay.
+
+    Raises :class:`WindowOverflowError` if the warehouse holds MORE items than the
+    request's window can carry — refusing to report a known-incomplete snapshot as
+    complete (no silent truncation; the poller surfaces this as an alert).
     """
     read_at = clock.now_iso()
     bins = reader.read_bins(
         erpnext_warehouse_ref=request.erpnext_warehouse_ref,
         item_window=request.item_window,
     )
+    # LOUD overflow guard: the reader returns up to max_items+1 so >max_items is
+    # detectable. A full-or-over read means the single v1 window did not cover the
+    # whole warehouse → refuse rather than silently drop the tail.
+    max_items = int(request.item_window.max_items)
+    if len(bins) > max_items:
+        raise WindowOverflowError(
+            f"warehouse {request.erpnext_warehouse_ref!r} has more than {max_items} "
+            f"Bin items; v1 single-window cannot report it completely (request "
+            f"{request.request_ref})"
+        )
     report = build_report(bins, read_at=read_at)
     return client.report_snapshot(
         request.request_ref,

@@ -118,6 +118,21 @@ def _request(ref="req-1", wh="ERP-WH-1"):
     )
 
 
+def test_process_request_raises_on_window_overflow_no_silent_truncation():
+    # Reader returns max_items + 1 rows → the warehouse exceeds the single v1 window.
+    # The worker must REFUSE (loud), not report a truncated snapshot as complete.
+    overflow = [
+        w.RawBin(item_code=f"ITEM-{i}", actual_qty=1.0, stock_uom="Nos") for i in range(501)
+    ]
+    reader = _FakeReader(overflow)
+    transport = _RecordingTransport()
+    client = t.BinViewClient(transport, correlation_id="corr-1")
+    with pytest.raises(w.WindowOverflowError):
+        w.process_request(_request(), client=client, reader=reader, clock=_FakeClock())
+    # Nothing was reported (no known-incomplete snapshot posted).
+    assert transport.posted == []
+
+
 def test_process_request_reads_warehouse_and_reports_with_idempotency_key():
     reader = _FakeReader([w.RawBin(item_code="ITEM-A", actual_qty=9.0, stock_uom="Nos")])
     transport = _RecordingTransport()

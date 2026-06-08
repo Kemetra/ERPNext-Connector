@@ -43,7 +43,9 @@ class FrappeBinReader:
     """
 
     def read_bins(self, *, erpnext_warehouse_ref: str, item_window) -> list[RawBin]:
-        limit = int(getattr(item_window, "max_items", 500))
+        # Read max_items + 1 so the worker can DETECT a warehouse that exceeds the
+        # single v1 window (it raises WindowOverflowError rather than truncate).
+        limit = int(getattr(item_window, "max_items", 500)) + 1
         rows = frappe.get_all(
             "Bin",
             filters={"warehouse": erpnext_warehouse_ref},
