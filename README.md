@@ -9,11 +9,26 @@
 Custom Frappe / ERPNext app that adapts ERPNext business documents, APIs, and configuration into
 stable contracts consumed by Data-Pulse-2.
 
-![Platform](https://img.shields.io/badge/platform-Frappe%20%2F%20ERPNext%20v15-0e7490)
-![Boundary](https://img.shields.io/badge/boundary-Data--Pulse--2%20only-7c3aed)
-![Status](https://img.shields.io/badge/status-foundation%20shipped%20%C2%B7%20003%20auth%20drafted-b45309)
-![Mutation](https://img.shields.io/badge/ERP%20mutation-none%20yet-1e293b)
-![License](https://img.shields.io/badge/license-internal-555)
+<p align="center">
+  <a href="pyproject.toml"><img alt="Platform: Frappe / ERPNext v15" src="https://img.shields.io/badge/platform-Frappe%20%2F%20ERPNext%20v15-0e7490?style=flat-square&logo=python&logoColor=white"></a>
+  <a href="README.md"><img alt="Repo: ERPNext Connector" src="https://img.shields.io/badge/repo-ERPNext%20Connector-181717?style=flat-square&logo=github&logoColor=white"></a>
+  <a href=".specify/memory/constitution.md"><img alt="Boundary: Data-Pulse-2 only" src="https://img.shields.io/badge/boundary-Data--Pulse--2%20only-7c3aed?style=flat-square"></a>
+  <a href="LICENSE"><img alt="License: internal" src="https://img.shields.io/badge/license-internal-334155?style=flat-square"></a>
+</p>
+
+<p align="center">
+  <a href="specs"><img alt="Specs 001 to 006 shipped" src="https://img.shields.io/badge/specs-001%E2%80%93006%20shipped-059669?style=flat-square"></a>
+  <a href="retail_tower_erpnext_connector/connector/posting/poller.py"><img alt="Posting poller: active" src="https://img.shields.io/badge/posting%20poller-active-059669?style=flat-square"></a>
+  <a href="retail_tower_erpnext_connector/connector/bin_view/poller.py"><img alt="Bin-view client: live (019)" src="https://img.shields.io/badge/bin--view%20client-live%20(019)-2563eb?style=flat-square"></a>
+  <a href="retail_tower_erpnext_connector/hooks.py"><img alt="Transport: pull / feed + ack" src="https://img.shields.io/badge/transport-pull%20%2F%20feed%20%2B%20ack-0e7490?style=flat-square"></a>
+</p>
+
+<p align="center">
+  <a href="docs/decisions"><img alt="Posting: idempotent" src="https://img.shields.io/badge/posting-idempotent-0f766e?style=flat-square"></a>
+  <a href="README.md"><img alt="ERP posting: Sales Invoice (006)" src="https://img.shields.io/badge/ERP%20posting-Sales%20Invoice%20(006)-b45309?style=flat-square"></a>
+  <a href="README.md"><img alt="ERPNext fork: never" src="https://img.shields.io/badge/ERPNext%20fork-never-dc2626?style=flat-square"></a>
+  <a href="docs/decisions/tax-fiscal-model.md"><img alt="Fiscal gate: pending" src="https://img.shields.io/badge/fiscal%20gate-pending-f59e0b?style=flat-square"></a>
+</p>
 
 </div>
 
@@ -397,40 +412,36 @@ The target docs-and-app layout (some entries are planned, not all present yet):
 
 ## Current Status
 
-**Spec 001 — Frappe App Foundation: implemented.** The custom Frappe app
-`retail_tower_erpnext_connector` is scaffolded with app metadata, a `Connector Settings`
-Single DocType placeholder, foundation tests, and install/version-pin/upgrade documentation.
-No product, stock, price, or sales mutation exists, and ERPNext is not forked.
+> Snapshot — verify against `specs/<id>/wave-status.md` and GitHub `main` before acting; chat memory is advisory, the repo is source of truth.
 
-Built via spec-driven development (`.specify/`): see the constitution at
-`.specify/memory/constitution.md` and the 001 artifacts under
-`specs/001-frappe-app-foundation/` (spec → plan → tasks → analyze).
+The connector is no longer LICENSE+README scaffolding — it is a real, actively-built Frappe app
+with a **live posting loop** and a **live bin-view read leg**.
 
-Staging install: see `docs/runbooks/staging-install.md`. Bench-validation steps (install,
-verify, `run-tests`) run on a staging ERPNext v15 bench.
+| Spec | Title | State |
+|---|---|---|
+| **001** | Frappe App Foundation | ✅ Shipped — app scaffold, metadata, `Connector Settings` Single DocType, install/version-pin/upgrade docs |
+| **002** | DocType Mapping Reference | ✅ Shipped — ERPNext ↔ Retail Tower mapping matrix; ambiguities recorded as signed decision records |
+| **003** | Data-Pulse Auth & API Policy | ✅ Shipped — connector authenticates **to** DP2 as a machine principal; HTTP client (pull/ack); G4 security gate |
+| **004** | Product ↔ ERPNext Item Mapping | ✅ Shipped — `specs/004-product-erpnext-item-mapping/` |
+| **006** | Sales Posting Adapter | ✅ Shipped — posting poller active (`scheduler_events`); idempotent Sales Invoice creation; G5 dedup closed |
+| **019** | ERPNext Bin-View Client | ✅ Live — `connector/bin_view/poller.py` pulls ERPNext Bin and reports stock back to DP2 (PR #25) |
 
-**Spec 002 — DocType Mapping Reference: drafted.** The ERPNext ↔ Retail Tower mapping matrix
-is at [`docs/architecture/doctype-mapping-reference.md`](docs/architecture/doctype-mapping-reference.md).
-It cites Data-Pulse-2 as authoritative for the Retail Tower side (it does not re-derive the
-mapping) and records ambiguous mappings as decision records under `docs/decisions/`
-(`mapping-uom.md`, `mapping-customer.md`) with open sign-offs that gate later specs.
+**What runs today.** `hooks.py` registers
+`retail_tower_erpnext_connector.connector.posting.poller.run_posting_poll` under
+`scheduler_events`. The poller reads `Connector Settings` (`dp2_base_url`, `dp2_token`, UOM map,
+warehouse map, store→Customer map), pulls pending postings from DP2's feed (capture-UP), resolves
+each line to a confirmed ERPNext Item, posts an **idempotent** Sales Invoice (replay-safe via a
+unique index), and acks the outcome. The bin-view client supplies the reverse read leg for stock
+reconciliation. ERPNext is never forked and its core is never copied.
 
-**Spec 003 — Data-Pulse Auth & API Policy: drafted.** The connector↔Data-Pulse-2 secure-channel
-policy is at [`docs/decisions/data-pulse-auth-and-api-policy.md`](docs/decisions/data-pulse-auth-and-api-policy.md):
-the connector authenticates **to** Data-Pulse-2 as a tenant-scoped machine principal and is the
-HTTP client (pull/ack); idempotent ack + no-duplicate posting; no secrets in logs + correlation
-via the DP2 `request_id`. It is the **security gate (G4)** that specs 004+ ride on. An open
-dependency (`docs/decisions/connector-token-scope.md`) tracks that DP2 must provision a dedicated
-connector token scope before staging authentication.
+**Frontier (external / gated).** The remaining work is cross-system live validation against an
+ERPNext-major staging site, plus the **tax/fiscal Egypt** gate (spec 007 / G6): customer-facing
+fiscal production is blocked until receipt tax = DP2 sale tax = ERP invoice tax. Treat live ERPNext
+validation as the next milestone, not another in-repo slice.
 
-**Next work item:** `004-product-and-price-export`.
-
-Do not implement catalog, inventory, sales posting, or tax mutation before the relevant
-connector contract is reviewed (constitution Principle VII). **Gate status before 004+:** the
-003 auth policy (G4) is in place; the UOM, Customer, and connector-token-scope decisions are
-**signed** (all Option A, 2026-06-04). Remaining dependency: DP2 must still *provision* the
-connector token scope before staging authentication (SC-001) — the decision is signed, the
-delivery is pending.
+Built via spec-driven development (`.specify/`): constitution at `.specify/memory/constitution.md`;
+per-spec artifacts under `specs/<id>/` (spec → plan → tasks → analyze). Staging install:
+`docs/runbooks/staging-install.md` (install / verify / `run-tests` on a staging ERPNext v15 bench).
 
 ---
 
