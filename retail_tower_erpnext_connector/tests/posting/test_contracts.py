@@ -114,8 +114,23 @@ class TestPostingWorkItem:
 
     def test_idempotency_key_is_source_system_and_external_id(self):
         wi = c.PostingWorkItem.from_wire(_wire_work_item())
-        # O-3 wire idempotency anchor.
+        # O-3 wire idempotency anchor (forward sale_post — UNCHANGED).
         assert wi.idempotency_key == ("pos-pulse", "POS-9001")
+
+    def test_idempotency_key_fails_closed_for_reversal(self):
+        # #28 guard: a reversal's top-level externalId is the ORIGINAL sale's id, so
+        # (sourceSystem, externalId) is the PRE-FIX buggy anchor. idempotency_key must REFUSE to
+        # hand it back — reversals key via idempotency.key_for/provenance_id (on workItemRef).
+        wire = _wire_work_item()
+        wire["kind"] = "reversal"
+        wire["reversalOf"] = {
+            "sourceSystem": "pos-pulse",
+            "externalId": "POS-9001",
+            "reversalKind": "refund",
+        }
+        wi = c.PostingWorkItem.from_wire(wire)
+        with pytest.raises(ValueError, match="forward sale_post anchor only"):
+            _ = wi.idempotency_key
 
     def test_reversal_carries_reversal_ref(self):
         wire = _wire_work_item()
