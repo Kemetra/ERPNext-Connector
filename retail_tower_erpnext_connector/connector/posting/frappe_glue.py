@@ -32,6 +32,7 @@ from .builder import UnmappedUnit, build_sales_invoice
 from .contracts import ErpnextDocumentRef, OutcomeAckRequest, PostingWorkItem
 from .idempotency import IdempotencyConflict, IdempotencyStore, key_for
 from .reasons import FailureKind, scrub_message, to_rejection_reason
+from .reversal_builder import build_reversing_invoice
 from .transport import PostingFeedClient
 from .uom import (
     MoneyConformanceError,
@@ -133,16 +134,26 @@ def post_work_item(
         _log_signal("posting.replay", work_item, correlation_id)
         return "posted"
 
-    # F-001 — a `reversal` work-item must post a REVERSING document, not a fresh Sales Invoice
-    # (012: kind=reversal). The reversal path is not in the interim R1 slice — fail closed
-    # rather than mis-post a positive invoice. (Implementing it is a later slice.)
+    # F-001 — a `reversal` work-item posts a REVERSING document (a return Sales Invoice,
+    # `is_return=1`), NOT a fresh positive Sales Invoice (012: kind=reversal). Arc A S1 routes it
+    # to the dedicated reversal leg below. Any unknown kind still fails closed.
+    if work_item.kind == "reversal":
+        return _post_reversal(
+            work_item,
+            client=client,
+            store=store,
+            uom_map=uom_map,
+            warehouses=warehouses,
+            customers=customers,
+            correlation_id=correlation_id,
+        )
     if work_item.kind != "sale_post":
         return _reject(
             client,
             work_item,
             correlation_id,
             FailureKind.OTHER,
-            f"work-item kind {work_item.kind!r} not supported in interim slice (R1)",
+            f"work-item kind {work_item.kind!r} not supported (012 kinds: sale_post, reversal)",
         )
 
     # Build the Sales-Invoice payload from the pure-Python core (no frappe in the build).
@@ -229,6 +240,148 @@ def post_work_item(
         document_ref = conflict.existing  # echo the already-recorded document (no duplicate)
 
     # T032 — ack posted + documentRef; the DP2 sale fact is never mutated.
+    client.ack_outcome(
+        work_item.work_item_ref,
+        OutcomeAckRequest.posted(document_ref),
+        idempotency_key=_ack_key(work_item, "posted"),
+    )
+    _log_signal("posting.posted", work_item, correlation_id, document_ref=document_ref.name)
+    return "posted"
+
+
+def _resolve_original_invoice(work_item: PostingWorkItem) -> str | None:
+    """Resolve the ORIGINAL submitted Sales Invoice this reversal targets (Arc A S1).
+
+    ⏳ BENCH-VALIDATION. Looks up the forward SI by the reversed sale's provenance
+    ``(reversal_of.source_system, reversal_of.external_id)`` — the 012 ``reversalOf`` anchor, which
+    is the original sale's ``(sourceSystem, externalId)``, NOT this reversal work-item's own id.
+    Returns the original SI's ERPNext docname for ``return_against``, or None if none is found
+    (the caller fails closed — never post a reversal against a sale that was never posted).
+    """
+    if work_item.reversal_of is None:  # an upstream contract violation for kind=reversal.
+        return None
+    return frappe.db.get_value(
+        "Sales Invoice",
+        {
+            "rt_source_system": work_item.reversal_of.source_system,
+            "rt_external_id": work_item.reversal_of.external_id,
+            "docstatus": 1,
+        },
+        "name",
+    )
+
+
+def _post_reversal(
+    work_item: PostingWorkItem,
+    *,
+    client: PostingFeedClient,
+    store: IdempotencyStore,
+    uom_map: UomMap,
+    warehouses: PreResolvedWarehouse,
+    customers: StoreCustomerMap,
+    correlation_id: str,
+) -> str:
+    """Post one ``reversal`` work-item as a return Sales Invoice (credit note). Returns the outcome.
+
+    ⏳ BENCH-VALIDATION — this leg exercises live ``frappe`` APIs and CANNOT run in this
+    environment (no Frappe bench; standing-rules §6). It mirrors the sale_post path exactly:
+    replay-guard → build (pure ``build_reversing_invoice``) → resolve original for return_against →
+    ``insert().submit()`` → record_posted → ack ``posted``; transient/validation/dup/other handling
+    mirrors the forward path; an unresolvable original sale fails CLOSED (Principle VI — never post a
+    reversal against a sale that was never posted). Idempotency reuses the SAME ``store`` replay
+    primitive keyed on the reversal work-item's OWN ``(source_system, external_id)`` — no new
+    primitive (Arc A §4); a reversal→original is N:1 but each reversal request is 1:1 with its key.
+    """
+    key = key_for(work_item)
+
+    # Replay guard: an already-posted reversal key echoes the existing reversing-doc ref (T041).
+    existing = store.get_document_ref(key)
+    if existing is not None:
+        client.ack_outcome(
+            work_item.work_item_ref,
+            OutcomeAckRequest.posted(existing),
+            idempotency_key=_ack_key(work_item, "posted"),
+        )
+        _log_signal("posting.replay", work_item, correlation_id)
+        return "posted"
+
+    # Build the reversing payload from the pure core (no frappe in the build). Same fail-closed
+    # mapping as the forward path: unmapped unit → unmapped_unit; money/warehouse/store → validation;
+    # anything else → other. A final `except Exception` guarantees the terminal-outcome invariant.
+    try:
+        doc_payload = build_reversing_invoice(
+            work_item,
+            uom_for=uom_map.resolve,
+            warehouse_for=warehouses.for_store,
+            customer_for=customers.for_store,
+        )
+    except UnmappedUnit as exc:
+        return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, str(exc))
+    except (MoneyConformanceError, UnresolvedWarehouse, UnmappedStore) as exc:
+        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
+    except Exception as exc:  # any other build error is non-retryable — never let it escape.
+        return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
+
+    # Resolve the original SI for `return_against`. Fail CLOSED if the reversed sale was never
+    # posted (no submitted forward SI) — posting a reversal against a non-existent sale would be a
+    # silent inconsistency (Principle VI). The pure builder cannot do this lookup (no DB hit there),
+    # so it is applied here, on the bench leg, before insert.
+    original_name = _resolve_original_invoice(work_item)
+    if original_name is None:
+        return _reject(
+            client,
+            work_item,
+            correlation_id,
+            FailureKind.VALIDATION,
+            "reversal targets a sale with no submitted Sales Invoice (return_against unresolved)",
+        )
+    doc_payload["return_against"] = original_name
+
+    # Submit on ERPNext. The `unique_rt_si_provenance` index spans ALL Sales Invoices (incl.
+    # is_return=1), so a second submit of the SAME reversal key (own external_id) collides and is
+    # recovered exactly like the forward path — and because the builder wrote the reversal's OWN
+    # external_id (F-002), it does NOT collide with the original SI's slot.
+    try:
+        sinv = frappe.get_doc(doc_payload)
+        sinv.insert()
+        sinv.submit()
+        document_ref = ErpnextDocumentRef(doctype="Sales Invoice", name=sinv.name)
+    except _transient_exceptions() as exc:
+        client.ack_outcome(
+            work_item.work_item_ref,
+            OutcomeAckRequest.failed_transient(),
+            idempotency_key=_ack_key(work_item, "failed_transient"),
+        )
+        _log_signal("posting.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
+        return "failed_transient"
+    except _dup_provenance_exceptions() as exc:
+        # Crash-window recovery, keyed on the reversal's OWN provenance (F-002): a re-offer whose
+        # second submit hits the unique index resolves to the already-posted reversing doc.
+        recovered = _find_posted_invoice(work_item)
+        if recovered is None:
+            return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
+        document_ref = recovered
+        try:
+            store.record_posted(key, document_ref)
+        except IdempotencyConflict as conflict:
+            document_ref = conflict.existing
+        client.ack_outcome(
+            work_item.work_item_ref,
+            OutcomeAckRequest.posted(document_ref),
+            idempotency_key=_ack_key(work_item, "posted"),
+        )
+        _log_signal("posting.recovered", work_item, correlation_id, document_ref=document_ref.name)
+        return "posted"
+    except frappe.ValidationError as exc:  # type: ignore[attr-defined]
+        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
+    except Exception as exc:  # any OTHER error is non-retryable (F-005), not transient.
+        return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
+
+    try:
+        store.record_posted(key, document_ref)
+    except IdempotencyConflict as conflict:
+        document_ref = conflict.existing
+
     client.ack_outcome(
         work_item.work_item_ref,
         OutcomeAckRequest.posted(document_ref),
