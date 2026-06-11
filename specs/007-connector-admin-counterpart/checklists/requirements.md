@@ -63,7 +63,7 @@
 
 ## Forbidden-files / process compliance
 
-- [x] **No forbidden files edited** — only the four files in this draft folder (`docs/specs/drafts/028-followups/d9-10-connector-admin/`) were created. No `docs/gates/**`, `docs/kernel/**`, `docs/status/**`, no existing Orchestrator file, no README/CLAUDE.md. *(authoring session.)*
+- [x] **No forbidden files edited** — only the four spec artifacts now placed at `specs/007-connector-admin-counterpart/` were created (originally authored as the Orchestrator draft `d9-10-connector-admin`). No application code, Frappe DocType, migration, OpenAPI YAML, package/lock, CI, generated, secrets, env, or deployment file. No README/CLAUDE.md. *(authoring session.)*
 - [x] **No sibling implementation-repo edit** — no file created or modified in Data-Pulse-2, POS-Pulse, Retail-Tower-Console, or Retail-Tower-ERP-Next-Connector. Sibling repos read **read-only** via `git show origin/main:` / `ls-tree` / `log` (SC-04/SC-05 honored). *(Evidence basis method.)*
 - [x] **No git side effects** — nothing staged, committed, pushed, or PR'd; no `git add -A`/`git add .`; no branch switch; no checkout/pull/merge/reset/stash of any sibling repo.
 - [x] **No gate/kernel/status mutation** — this draft does not advance the kernel queue, define a gate, or update status; it feeds a future Queue Item under G10 only. *(§0 notes.)*
