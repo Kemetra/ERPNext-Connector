@@ -77,3 +77,40 @@ SQL migration in the chain, DP-2 `0021`, is upstream). **T1.2** is a Docker-free
 **Next recommended step:** owner decides commit/PR for this slice; then T1.3 bench-migrate validation on a
 staging bench, and OQ-1 (warning channel: operator UI banner / ops alert / posting-log) before wiring the
 warning into the poller tick.
+
+## Slice 2 — OQ-1 resolved + poller wiring (2026-06-12, branch `feat/007-oq1-expiry-warning`)
+
+OQ-1 decided by the owner: **(a)** warn lead-time is **operator-configurable** (`dp2_credential_warn_days`,
+default 14); **(b)** channel is a **structured ops-log event** (`posting.credential.expiring`), matching
+`posting.poll.skipped` / `posting.feed.degraded`. Built TDD off PR #34's merged base.
+
+- **OQ-1a parser (pure, locally tested):** `credential_lifecycle.parse_warn_within(warn_days)` →
+  `timedelta`. Blank/`None`/`0` (unset Frappe Int) → `DEFAULT_WARN_WITHIN` (14d); negative/non-numeric →
+  `ConfigError` (fail-loud, never a silent fallback that warns on the wrong schedule). 4 tests.
+- **OQ-1a DocType field ([GATED]):** additive `dp2_credential_warn_days` (Int, default 14, non-secret) in
+  the `credential_lifecycle_section`. Shape test extended (Int + default 14). `dp2_token` still the only
+  Password field.
+- **OQ-1b total composer (pure, locally tested):** `credential_lifecycle.build_expiry_warning(...)` →
+  the log-payload dict or `None`. **TOTAL — never raises:** a malformed warn-days returns a
+  `posting.credential.warn_check_failed` payload, so an advisory warning can NEVER abort a posting tick
+  (best-effort). This keeps the branching + exception policy in the locally-testable layer (config.py
+  discipline), not the frappe shell. 6 tests incl. the garbage-input → no-raise path and a no-token-leak
+  assertion.
+- **OQ-1b poller wiring (thin frappe shell, ⏳ BENCH-VALIDATION):** `poller._warn_if_credential_expiring`
+  reads `dp2_credential_expires_at` / `dp2_credential_id` / `dp2_credential_warn_days`, calls the total
+  helper with `frappe.utils.now_datetime()`, scrubs the detail, and logs. Called inside
+  `_build_posting_path` (reuses the single `get_doc`, BEFORE the maps gate — warns even on a tick that
+  later skips for unconfigured maps). The outer `try/except` guards only an irreducible frappe read
+  failure. `poller.py` imports `frappe` → `py_compile` + ruff locally; behavior is bench-deferred (§6).
+
+**Validation (local, fresh):** full pure-Python suite **186 passed** (11 new: 4 parser + 1 shape + 6
+composer); ruff clean; `py_compile` clean (poller + lifecycle); `connector_settings.json` valid JSON;
+only `dp2_token` is a Password field; forbidden-path audit — only the owner-approved `[GATED]`
+`connector_settings.json`; `git diff --check` clean. **No commit/push/PR** until instructed (§5).
+
+**Honest scope:** the OQ-1b *decision logic* is locally tested via the total `build_expiry_warning`; the
+*poller shell* (field reads + `frappe.logger`) is inspection-only + `⏳ BENCH-VALIDATION` like the
+sibling `_load_*` shells — its emit path runs on a real bench, not here.
+
+**Changed files:** `connector_settings.json` (+8), `credential_lifecycle.py` (+69), `poller.py` (+37),
+`test_credential_lifecycle.py` (+100), `test_connector_settings_shape.py` (+8).

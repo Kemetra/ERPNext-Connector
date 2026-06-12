@@ -79,6 +79,11 @@ def _build_posting_path():
     correlation_id = frappe.generate_hash(length=16)
     settings = frappe.get_doc("Connector Settings")  # one read; child tables + Password live here
 
+    # Proactive credential-expiry warning (007 OQ-1): best-effort, BEFORE the posting work. It reuses
+    # this single get_doc and never aborts a tick (a working-but-expiring credential should still
+    # post while we nudge the operator) — so a malformed warn-days is logged, not raised.
+    _warn_if_credential_expiring(settings)
+
     # Parse the maps, then GATE: a fully-empty required map means the connector is not yet
     # configured (every work-item has a store + >=1 line, so an empty map would 100%-reject). Raise
     # so run_posting_poll catches it → posting.poll.skipped, sales stay pending — NOT mass-rejected
@@ -168,6 +173,38 @@ def _build_http_transport(settings) -> _RequestsTransport:
     if not base_url or not token:
         raise ValueError("Connector Settings: dp2_base_url and dp2_token are required")
     return _RequestsTransport(base_url, token)
+
+
+def _warn_if_credential_expiring(settings) -> None:
+    """Emit a structured ops alert when the configured credential is near/past expiry (007 OQ-1).
+
+    Thin frappe shell over the TOTAL :func:`credential_lifecycle.build_expiry_warning` (the decision
+    + best-effort-on-garbage policy is unit-tested locally; only the field reads + log are bench-only
+    here). The helper never raises — a malformed warn-days comes back as a ``warn_check_failed``
+    payload — so a posting tick is never aborted by an advisory warning. The outer ``try/except``
+    guards only an irreducible frappe read failure (e.g. a corrupt stored timestamp).
+
+    Channel (OQ-1b): a structured log event matching the existing ``posting.poll.skipped`` /
+    ``posting.feed.degraded`` events. The payload carries the NON-secret credential id + expiry
+    only — never the token (S-1 / Gate G4); ``_safe`` scrubs the detail defensively.
+    """
+    from .credential_lifecycle import build_expiry_warning
+
+    try:
+        payload = build_expiry_warning(
+            now=frappe.utils.now_datetime(),
+            expires_at=settings.dp2_credential_expires_at,
+            warn_days_raw=getattr(settings, "dp2_credential_warn_days", None),
+            credential_id=settings.dp2_credential_id,
+        )
+    except Exception as exc:  # irreducible frappe read failure — advisory only, never stop posting.
+        frappe.logger(_LOGGER).warning(
+            {"event": "posting.credential.warn_check_failed", "reason": _safe(str(exc))}
+        )
+        return
+    if payload is not None:
+        payload["detail"] = _safe(payload["detail"])
+        frappe.logger(_LOGGER).warning(payload)
 
 
 def _load_uom_map(settings) -> dict:

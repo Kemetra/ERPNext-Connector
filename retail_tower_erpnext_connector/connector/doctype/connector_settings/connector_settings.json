@@ -13,6 +13,7 @@
   "dp2_credential_id",
   "dp2_credential_issued_at",
   "dp2_credential_expires_at",
+  "dp2_credential_warn_days",
   "maps_section",
   "uom_map",
   "warehouse_map",
@@ -64,6 +65,13 @@
    "fieldtype": "Datetime",
    "label": "DP2 Credential Expires At",
    "description": "The credential's bounded expiry (IssuedCredential.expires_at, server default 90 days, 007 §5/§6, E-1). NON-SECRET — drives the pre-expiry warning (G-2): the connector compares now() to this and surfaces 'credential expiring — request rotation' BEFORE a 401. The connector cannot self-rotate (admin surface is session-only)."
+  },
+  {
+   "fieldname": "dp2_credential_warn_days",
+   "fieldtype": "Int",
+   "label": "Credential Warn Days",
+   "default": "14",
+   "description": "How many days before dp2_credential_expires_at the connector starts logging the 'credential expiring — request rotation' ops alert each poll tick (007 OQ-1a). NON-SECRET. Blank/0 → the 14-day default; a negative value is a config error (fail-loud)."
   },
   {
    "fieldname": "maps_section",

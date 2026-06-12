@@ -81,6 +81,14 @@ class TestLifecycleFieldsAdded:
         f = fields_by_name["dp2_credential_issued_at"]
         assert f["fieldtype"] == "Datetime"
 
+    def test_credential_warn_days_present_as_int_with_default(self, fields_by_name: dict[str, dict]):
+        # OQ-1a — operator-configurable pre-expiry warning lead time (days). An Int with a default of
+        # 14 so an operator who never touches it gets the documented default (parse_warn_within maps
+        # blank/0 → DEFAULT_WARN_WITHIN). Non-secret.
+        f = fields_by_name["dp2_credential_warn_days"]
+        assert f["fieldtype"] == "Int"
+        assert str(f.get("default")) == "14"
+
 
 class TestLifecycleFieldsAreNonSecret:
     # §5 / S-2: registration id, credential id, and the timestamps are identifiers/status only —
