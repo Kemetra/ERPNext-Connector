@@ -240,6 +240,36 @@ def build_expiry_warning(
     }
 
 
+def check_registration_link(*, token_present: bool, registration_id: str | None) -> dict | None:
+    """Advisory local mirror of the US4 server-side link invariant (007 OQ-2) — a TOTAL function.
+
+    The US4 guard refuses an unlinked `connector`-scoped token server-side (E-4). This surfaces the
+    same condition LOCALLY as a warning: when a `dp2_token` is configured but no
+    `dp2_connector_registration_id` is recorded, the credential is a legacy UNLINKED token.
+
+    **Warn-only by design (owner-decided):** an unlinked legacy token still works until US4
+    enforcement reaches the connector's environment (E-5), and during the D10 cutover the operator
+    legitimately has the token set before the registration ref — so this returns a warning payload,
+    never blocks (a hard skip would risk a self-inflicted outage on a working token). Returns
+    ``None`` when properly linked, or when no token is set (the unconfigured state is handled by the
+    base-url/token gate, not here).
+
+    Takes only the token's PRESENCE (a bool) — never the token value (S-1 / Gate G4).
+    """
+    if not token_present:
+        return None
+    if (registration_id or "").strip():
+        return None
+    return {
+        "event": "posting.credential.unlinked",
+        "detail": (
+            "DP2 token is configured but no dp2_connector_registration_id is recorded — this is a "
+            "legacy unlinked credential. Register the connector instance and reconfigure with the "
+            "registration ref (007 §7); it will be refused once the US4 guard enforcement is live."
+        ),
+    }
+
+
 def apply_rotation(
     refs: CredentialRefs,
     *,
