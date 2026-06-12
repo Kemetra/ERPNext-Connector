@@ -1,7 +1,11 @@
 # Decision: DP2 Connector Token Scope
 
-**Spec**: 003 — Data-Pulse Auth & API Policy | **Status**: 🟢 SIGNED (Option A) — awaiting DP2 delivery | **Date raised**: 2026-06-04 | **Signed**: 2026-06-04
-**Blocks**: SC-001 (staging authentication) — *direction decided; remains blocked until DP2 ships the scope (see sign-off)*
+**Spec**: 003 — Data-Pulse Auth & API Policy | **Status**: 🟢 SIGNED (Option A) — ✅ DP2 DELIVERED (2026-06-12) | **Date raised**: 2026-06-04 | **Signed**: 2026-06-04
+**Blocks**: SC-001 (staging authentication) — *direction decided; the awaited DP2 `connector` scope landed (018, PR #516)*
+
+> **Delivery landed (closed by spec 007, E-6).** The dedicated `connector` scope this decision awaited is
+> shipped on DP-2 (migration `0021` + `connector-admin.yaml`). The connector-side adoption is recorded in
+> [`connector-credential-lifecycle.md`](./connector-credential-lifecycle.md). This dependency is no longer open.
 
 ## Question
 
