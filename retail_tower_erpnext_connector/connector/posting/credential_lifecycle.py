@@ -31,9 +31,39 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import Enum
 
-# OQ-1 is a plan-phase decision (how far ahead to warn + through what channel). The helper takes the
-# lead time as a parameter with a documented default so the policy is explicit, not hard-coded.
+# OQ-1 (resolved): how far ahead to warn is OPERATOR-CONFIGURABLE via Connector Settings
+# `dp2_credential_warn_days` (parsed by :func:`parse_warn_within`); 14 days when unset. The channel
+# is a structured ops-log event emitted by the poller (`posting.credential.expiring`). The helper
+# still takes the lead time as a parameter so the policy is explicit, not hard-coded.
 DEFAULT_WARN_WITHIN = timedelta(days=14)
+
+
+class ConfigError(Exception):
+    """A Connector Settings lifecycle value is malformed (e.g. a negative/non-numeric warn-days) —
+    fail loud rather than silently fall back, which would hide a fat-fingered setting (Principle VI)."""
+
+
+def parse_warn_within(warn_days: object) -> timedelta:
+    """Parse Connector Settings ``dp2_credential_warn_days`` → a :class:`timedelta` (OQ-1a).
+
+    Blank / ``None`` / ``0`` (an unset Frappe Int) → :data:`DEFAULT_WARN_WITHIN` (the operator left
+    it alone). A negative or non-numeric value is a :class:`ConfigError` — surfaced loud, never a
+    silent fallback that would warn on the wrong schedule. Frappe may hand the value back as a
+    string, so a numeric string is accepted.
+    """
+    if warn_days is None or warn_days == "":
+        return DEFAULT_WARN_WITHIN
+    try:
+        days = int(warn_days)
+    except (TypeError, ValueError):
+        raise ConfigError(
+            f"dp2_credential_warn_days must be a whole number of days, got {warn_days!r}"
+        ) from None
+    if days == 0:
+        return DEFAULT_WARN_WITHIN
+    if days < 0:
+        raise ConfigError(f"dp2_credential_warn_days must not be negative, got {days}")
+    return timedelta(days=days)
 
 
 class CredentialExpiryStatus(str, Enum):
@@ -173,6 +203,41 @@ def evaluate_expiry(
         should_warn=False,
         message=f"DP2 credential {cred} active until {expires_at.isoformat()}.",
     )
+
+
+def build_expiry_warning(
+    *,
+    now: datetime,
+    expires_at: datetime | None,
+    warn_days_raw: object,
+    credential_id: str | None,
+) -> dict | None:
+    """Compose the per-tick credential-expiry warning payload (OQ-1b) — a TOTAL function.
+
+    Combines :func:`parse_warn_within` + :func:`evaluate_expiry` and returns the structured
+    ops-log payload the poller emits, or ``None`` when no warning should surface. It NEVER raises:
+    a malformed ``warn_days_raw`` returns a distinct ``posting.credential.warn_check_failed`` payload
+    instead, so an advisory warning can never abort the posting tick (best-effort). This keeps the
+    branching + best-effort policy in the locally-testable layer, leaving the poller a thin shell
+    (frappe-free decision, per the repo's config.py discipline).
+
+    The payload carries only the NON-secret credential id + expiry message — never a token (S-1/G4).
+    """
+    try:
+        warn_within = parse_warn_within(warn_days_raw)
+    except ConfigError as exc:
+        return {"event": "posting.credential.warn_check_failed", "detail": str(exc)}
+
+    state = evaluate_expiry(
+        now=now, expires_at=expires_at, warn_within=warn_within, credential_id=credential_id
+    )
+    if not state.should_warn:
+        return None
+    return {
+        "event": "posting.credential.expiring",
+        "status": state.status.value,
+        "detail": state.message,
+    }
 
 
 def apply_rotation(

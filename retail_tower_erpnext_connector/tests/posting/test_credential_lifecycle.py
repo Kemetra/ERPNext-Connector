@@ -88,6 +88,30 @@ class TestCredentialExpiryState:
         assert "request rotation" in state.message.lower()
 
 
+class TestParseWarnWithin:
+    # OQ-1a (configurable warn lead-time): the operator sets dp2_credential_warn_days in Connector
+    # Settings. The PARSE lives here (pure, locally testable); only the field read is bench-only.
+    # Blank/unset → the documented default (operator left it alone); a non-numeric or negative value
+    # is a CONFIG error surfaced loud (Principle VI — never silently fall back, which would hide a
+    # fat-fingered setting and warn on the wrong schedule).
+    def test_blank_or_none_yields_default(self):
+        assert cl.parse_warn_within(None) == cl.DEFAULT_WARN_WITHIN
+        assert cl.parse_warn_within("") == cl.DEFAULT_WARN_WITHIN
+        assert cl.parse_warn_within(0) == cl.DEFAULT_WARN_WITHIN  # 0/unset Frappe Int → default
+
+    def test_positive_int_becomes_timedelta_days(self):
+        assert cl.parse_warn_within(7) == timedelta(days=7)
+        assert cl.parse_warn_within("30") == timedelta(days=30)  # Frappe may hand back a string
+
+    def test_negative_is_config_error(self):
+        with pytest.raises(cl.ConfigError):
+            cl.parse_warn_within(-1)
+
+    def test_non_numeric_is_config_error(self):
+        with pytest.raises(cl.ConfigError):
+            cl.parse_warn_within("soon")
+
+
 class TestAuthFailedSurfacing:
     # T2.2 / 003 §8: a 401 on pull/ack is a CREDENTIAL problem, not a server transient. It must
     # surface a non-disclosing 're-authenticate' state, never expose the raw/previous token, and
@@ -119,6 +143,82 @@ class TestAuthFailedSurfacing:
         state = cl.classify_auth_failure(operation="pull")
         # must not claim a specific disclosed cause the non-disclosing 401 cannot support
         assert "revoked" not in state.message.lower()
+
+
+class TestBuildExpiryWarning:
+    # OQ-1b — the TOTAL helper the poller shell calls each tick: composes parse_warn_within +
+    # evaluate_expiry and returns a log-payload dict when a warning should surface, or None when it
+    # should not. It NEVER raises — a malformed warn_days returns a 'warn_check_failed' payload
+    # instead, so the poller's posting tick is never aborted by an advisory warning (best-effort).
+    # This is the branching/exception policy moved OUT of the frappe-coupled poller into the
+    # locally-testable layer (config.py's stated discipline).
+    def test_returns_none_when_active(self):
+        assert (
+            cl.build_expiry_warning(
+                now=_NOW,
+                expires_at=_NOW + timedelta(days=60),
+                warn_days_raw=14,
+                credential_id="cred_x",
+            )
+            is None
+        )
+
+    def test_returns_none_when_unknown(self):
+        # No recorded expiry → UNKNOWN → should_warn False → no payload (reactive fallback).
+        assert (
+            cl.build_expiry_warning(
+                now=_NOW, expires_at=None, warn_days_raw=14, credential_id="cred_x"
+            )
+            is None
+        )
+
+    def test_returns_payload_when_expiring(self):
+        payload = cl.build_expiry_warning(
+            now=_NOW,
+            expires_at=_NOW + timedelta(days=3),
+            warn_days_raw=14,
+            credential_id="cred_x",
+        )
+        assert payload is not None
+        assert payload["event"] == "posting.credential.expiring"
+        assert payload["status"] == cl.CredentialExpiryStatus.EXPIRY_WARNING.value
+        assert "cred_x" in payload["detail"]
+
+    def test_respects_configured_warn_days(self):
+        # With a 1-day window, an expiry 3 days out is still ACTIVE → no payload. Proves the
+        # configured value (not the 14-day default) actually drives the decision.
+        assert (
+            cl.build_expiry_warning(
+                now=_NOW,
+                expires_at=_NOW + timedelta(days=3),
+                warn_days_raw=1,
+                credential_id="cred_x",
+            )
+            is None
+        )
+
+    def test_malformed_warn_days_returns_warn_check_failed_not_raise(self):
+        # THE point of the total helper: a fat-fingered warn_days must NOT raise (which would abort
+        # the posting tick); it returns a distinct best-effort failure payload the poller logs.
+        payload = cl.build_expiry_warning(
+            now=_NOW,
+            expires_at=_NOW + timedelta(days=3),
+            warn_days_raw="soon",
+            credential_id="cred_x",
+        )
+        assert payload is not None
+        assert payload["event"] == "posting.credential.warn_check_failed"
+
+    def test_payload_never_contains_a_token(self):
+        # S-1 / G-4: the helper is given only non-secret fields; assert nothing token-like leaks.
+        payload = cl.build_expiry_warning(
+            now=_NOW,
+            expires_at=_NOW - timedelta(days=1),  # expired → payload present
+            warn_days_raw=14,
+            credential_id="cred_x",
+        )
+        assert payload is not None
+        assert "Bearer" not in payload["detail"]
 
 
 class TestRotationPreservesRegistration:
