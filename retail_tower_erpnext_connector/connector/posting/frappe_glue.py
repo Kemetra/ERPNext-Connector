@@ -30,7 +30,7 @@ import frappe
 
 from .builder import UnmappedUnit, build_sales_invoice
 from .contracts import ErpnextDocumentRef, OutcomeAckRequest, PostingWorkItem
-from .idempotency import IdempotencyConflict, IdempotencyStore, key_for
+from .idempotency import IdempotencyConflict, IdempotencyStore, key_for, provenance_id
 from .reasons import FailureKind, scrub_message, to_rejection_reason
 from .reversal_builder import build_reversing_invoice
 from .transport import PostingFeedClient
@@ -88,16 +88,21 @@ def _dup_provenance_exceptions() -> tuple[type[BaseException], ...]:
 
 
 def _find_posted_invoice(work_item: PostingWorkItem) -> ErpnextDocumentRef | None:
-    """Resolve the already-submitted Sales Invoice for this sale's provenance (G5/F-002 recovery).
+    """Resolve the already-submitted Sales Invoice for this work-item's provenance (G5/F-002 recovery).
 
     Looks up by the `(rt_source_system, rt_external_id)` idempotency anchor — a hit IS the same
-    logical sale. Returns the document_ref to echo, or None if no submitted SI exists.
+    logical posting. The `rt_external_id` value is the #28 discriminator `provenance_id(work_item)`:
+    `external_id` for a `sale_post` (UNCHANGED forward recovery), `work_item_ref` for a `reversal`.
+    This MUST mirror what the builder wrote (`reversal_builder` writes the same `provenance_id`),
+    else a reversal crash-recovery would match the ORIGINAL forward SI by `external_id` and echo it
+    (re-introducing the #28 silent mis-success on the dup path). Returns the document_ref to echo,
+    or None if no submitted SI exists.
     """
     name = frappe.db.get_value(
         "Sales Invoice",
         {
             "rt_source_system": work_item.source_system,
-            "rt_external_id": work_item.external_id,
+            "rt_external_id": provenance_id(work_item),
             "docstatus": 1,
         },
         "name",
@@ -289,8 +294,10 @@ def _post_reversal(
     ``insert().submit()`` → record_posted → ack ``posted``; transient/validation/dup/other handling
     mirrors the forward path; an unresolvable original sale fails CLOSED (Principle VI — never post a
     reversal against a sale that was never posted). Idempotency reuses the SAME ``store`` replay
-    primitive keyed on the reversal work-item's OWN ``(source_system, external_id)`` — no new
-    primitive (Arc A §4); a reversal→original is N:1 but each reversal request is 1:1 with its key.
+    primitive but keyed on the reversal work-item's ``(source_system, work_item_ref)`` (Connector
+    #28 re-key via :func:`key_for` — the top-level ``external_id`` on a reversal is the ORIGINAL
+    sale's id and would collide with its replay slot). No new primitive (Arc A §4); a
+    reversal→original is N:1 but each reversal request is 1:1 with its key.
     """
     key = key_for(work_item)
 
@@ -338,9 +345,9 @@ def _post_reversal(
     doc_payload["return_against"] = original_name
 
     # Submit on ERPNext. The `unique_rt_si_provenance` index spans ALL Sales Invoices (incl.
-    # is_return=1), so a second submit of the SAME reversal key (own external_id) collides and is
-    # recovered exactly like the forward path — and because the builder wrote the reversal's OWN
-    # external_id (F-002), it does NOT collide with the original SI's slot.
+    # is_return=1), so a second submit of the SAME reversal key (its work_item_ref) collides and is
+    # recovered exactly like the forward path — and because the builder wrote the reversal's
+    # work_item_ref into rt_external_id (#28 re-key), it does NOT collide with the original SI's slot.
     try:
         sinv = frappe.get_doc(doc_payload)
         sinv.insert()
@@ -355,8 +362,9 @@ def _post_reversal(
         _log_signal("posting.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
         return "failed_transient"
     except _dup_provenance_exceptions() as exc:
-        # Crash-window recovery, keyed on the reversal's OWN provenance (F-002): a re-offer whose
-        # second submit hits the unique index resolves to the already-posted reversing doc.
+        # Crash-window recovery, keyed on the reversal's work_item_ref provenance (#28 re-key): a
+        # re-offer whose second submit hits the unique index resolves to the already-posted
+        # reversing doc (via _find_posted_invoice, which reads the same provenance_id discriminator).
         recovered = _find_posted_invoice(work_item)
         if recovered is None:
             return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))

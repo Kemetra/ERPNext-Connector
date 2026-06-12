@@ -3,6 +3,52 @@
 Branch: `feat/006-reversal-apply`. Scope: route 012 `kind=reversal` work-items to a reversing
 ERPNext document. Touches ONLY the Connector repo's posting layer + its tests.
 
+## UPDATE — Reversal re-key (Arc A S1.5, Connector #28, branch `feat/006-reversal-rekey`)
+
+**Confirmed defect (#28).** The S1 reversal-apply keyed its replay-guard AND wrote `rt_external_id`
+on the work-item's top-level `(source_system, external_id)`, ASSUMING that anchor is
+per-reversal-distinct. It is NOT: **DP2 emits the ORIGINAL sale's `external_id` as the top-level
+anchor on a reversal work-item** (per-reversal distinctness lives only in `source_ref_id`, which is
+NOT on the wire — verified absent from `posting-feed.yaml` `PostingWorkItem`). Result: a reversal of
+a posted sale hit the replay guard, which returned the ORIGINAL sale's invoice and acked `posted` —
+no credit note, no exception, no DLQ. Silent mis-success.
+
+**Decision (CHECKPOINT-2 — A-opt-2, connector-side).** Re-key reversals onto `work_item_ref`
+(= 012 `PostingWorkItem.workItemRef`, the status-row id, required, already the ack identity — the
+connector-side per-reversal-distinct value that IS on the wire). The forward `sale_post` key is
+UNCHANGED: `(source_system, external_id)` (SC-11). No DP2/contract change (SC-04/SC-06): the wire is
+consumed as-is; the fix is entirely connector-side.
+
+**One discriminator, three consumers.** `idempotency.provenance_id(work_item)` is the single source
+of truth: `external_id` for `sale_post`, `work_item_ref` for `reversal`. All three reversal-distinct
+sites read it so the crash/dup-recovery path cannot drift back into #28:
+1. Replay-guard key — `idempotency.key_for` = `(source_system, provenance_id)`.
+2. Written provenance — `reversal_builder` sets `rt_external_id = provenance_id(work_item)`,
+   `rt_source_system = work_item.source_system`.
+3. Dup-recovery lookup — `frappe_glue._find_posted_invoice` queries
+   `rt_external_id == provenance_id(work_item)` (kind-aware; forward recovery still uses
+   `external_id`).
+
+**Store.** Both key shapes are `tuple[str, str]` and coexist in one store without type confusion or
+collision: a `sale_post` key `(source_system, external_id)` and a `reversal` key
+`(source_system, work_item_ref)` for the same logical sale are distinct entries. The only theoretical
+clash is a `work_item_ref` (a UUID) equal to some `external_id` under the same `source_system` —
+negligible. No store code change required.
+
+**Tests (TDD).** The S1 F-002 fixture gave the reversal a DISTINCT top-level `external_id` — a FALSE
+wire shape that masked #28. Corrected to the REAL wire: reversal `external_id` == original sale's
+(`POS-9001`), `work_item_ref` is the distinct discriminator. New/updated assertions in
+`test_idempotency.py` (`TestKeyDerivation`) and `test_reversal_builder.py`
+(`TestF002ProvenanceIdentity`, `TestCardinalityNto1`): reversal key distinct from the original
+sale_post's key even with the SAME `external_id`; `rt_external_id == work_item_ref`; N:1 →
+distinct keys + distinct `rt_external_id`; both key shapes coexist. Pure layer: **139 passing**
+locally (was 134), ruff-clean.
+
+**Bench-pending.** `frappe_glue._find_posted_invoice` and `_post_reversal` import `frappe` and are
+un-importable here (standing-rules §6); the kind-aware `provenance_id` edits are made, py_compile- and
+ruff-clean, but NOT executed — validated on the staging ERPNext v15 bench, same posture as the S1
+apply leg.
+
 ## CHECKPOINT-1 — reversing document type (decided, not re-opened here)
 
 A reversal posts a **negative-qty return Sales Invoice** — in ERPNext a credit note IS a Sales

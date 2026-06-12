@@ -15,23 +15,28 @@ path and no duplicated line loop. This builder then:
   - sets ``is_return = 1`` (credit-note discriminator);
   - **negates** each line's ``qty`` and ``amount`` (return semantics); leaves ``rate`` positive
     (ERPNext convention — the sign lives on qty);
-  - overwrites the two provenance fields with the reversal work-item's OWN top-level identity
-    (THE F-002 RULE — see below);
+  - writes the provenance fields from the #28 discriminator: ``rt_external_id`` =
+    ``idempotency.provenance_id(work_item)`` (= ``work_item.work_item_ref`` for a reversal),
+    ``rt_source_system`` = ``work_item.source_system`` (THE F-002 RULE — see below);
   - overwrites ``posting_date`` with the reversal work-item's OWN ``business_date`` (the credit
     note posts in ITS fiscal period, not the original sale snapshot's).
 
-THE CRITICAL CORRECTNESS CONSTRAINT (F-002 forward constraint, wave-status.md): the
-``unique_rt_si_provenance`` index spans ALL Sales Invoices via ``rt_external_id``. The reversing
-doc MUST carry the reversal work-item's OWN ``work_item.external_id`` in ``rt_external_id`` — NOT
-``work_item.reversal_of.external_id`` (nor ``sale.external_id``, the original-sale snapshot). Writing
-the original's id would collide with the original SI's unique key and be FALSELY treated as a
-dup-recovery. Reading from the top-level ``work_item.*`` also matches what
-``frappe_glue._find_posted_invoice`` queries by, keeping a future reversal dup-recovery consistent.
+THE CRITICAL CORRECTNESS CONSTRAINT (F-002 + Connector #28): the ``unique_rt_si_provenance`` index
+spans ALL Sales Invoices via ``rt_external_id``. DP2 emits the ORIGINAL sale's ``externalId`` as the
+top-level anchor on a reversal work-item (``work_item.external_id == reversal_of.external_id ==
+sale.external_id`` — the original sale's id, NOT per-reversal-distinct). Writing that into
+``rt_external_id`` would collide with the original SI's unique key and be FALSELY treated as a
+dup-recovery — silently echoing the original invoice with no credit note (#28). The
+per-reversal-distinct value that IS on the wire is ``work_item_ref`` (the ack identity), so the
+reversing doc carries ``idempotency.provenance_id(work_item)`` (= ``work_item_ref``). This is the
+SAME value the replay key uses (``idempotency.key_for``) and the value
+``frappe_glue._find_posted_invoice`` queries by — one discriminator, three consumers.
 
 Cardinality: forward sale→SI is 1:1; reversal→original is **N:1** (successive partial returns).
-Each reversal work-item has its OWN ``external_id`` / reversal key, so each yields a distinct
-``rt_external_id`` even when several share one ``reversal_of``. Idempotency is per reversal-request
-key, reusing the same ``store`` replay primitive the sale_post path uses (in the glue leg).
+Each reversal work-item has its OWN ``work_item_ref`` / reversal key, so each yields a distinct
+``rt_external_id`` even when several share one ``external_id`` (the original sale). Idempotency is
+per reversal-request key, reusing the same ``store`` replay primitive the sale_post path uses (in
+the glue leg).
 
 ``return_against`` is NOT resolved here: mapping ``reversal_of`` → the original SI's ERPNext docname
 needs a DB hit, and this builder's injected signature carries no SI-resolver. The pure builder emits
@@ -46,6 +51,7 @@ from collections.abc import Callable
 
 from .builder import build_sales_invoice
 from .contracts import PostingWorkItem
+from .idempotency import provenance_id
 
 
 def _negate(amount: str) -> str:
@@ -97,12 +103,14 @@ def build_reversing_invoice(
 		item["qty"] = _negate(item["qty"])
 		item["amount"] = _negate(item["amount"])
 
-	# THE F-002 RULE: the reversing doc's provenance is the reversal work-item's OWN top-level
-	# identity — NOT the original sale's (reversal_of.* / sale.*). The forward builder wrote
-	# sale.external_id / sale.source_system; overwrite both with work_item.* so the unique
-	# provenance index does not collide with the original SI's slot.
+	# THE F-002 + #28 RULE: the reversing doc's provenance is the per-reversal-distinct discriminator
+	# (work_item_ref), NOT the original sale's id (which is what reversal_of.* / sale.* / and the
+	# top-level work_item.external_id ALL carry on a reversal). Writing the original's id would
+	# collide with the original SI's unique slot and silently echo the original invoice (#28).
+	# `provenance_id` is the single source of truth shared with the replay key and the dup-recovery
+	# lookup (one discriminator, three consumers).
 	doc["rt_source_system"] = work_item.source_system
-	doc["rt_external_id"] = work_item.external_id
+	doc["rt_external_id"] = provenance_id(work_item)
 
 	# The credit note posts in the REVERSAL's fiscal period (its own businessDate), not the
 	# original sale snapshot's. The forward builder set sale.business_date — overwrite it.

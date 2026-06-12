@@ -7,13 +7,16 @@ A reversal work-item (012 ``kind=reversal``) posts a **negative-qty return Sales
 (``is_return=1`` — in ERPNext a credit note IS a Sales Invoice with ``is_return=1``), chosen for
 symmetric DP-017 reconciliation against the 1:1 forward SI.
 
-THE CRITICAL CORRECTNESS CONSTRAINT (F-002 forward constraint): the unique provenance index spans
-ALL Sales Invoices via ``rt_external_id``. The reversing builder MUST write the reversal
-work-item's OWN top-level ``external_id`` into ``rt_external_id`` — NOT ``reversal_of.external_id``
-(the original sale's). Writing the original's id would collide with the original SI's unique key
-and be FALSELY treated as a dup-recovery. The fixture below makes the work-item ``externalId``
-differ from BOTH ``sale.externalId`` AND ``reversalOf.externalId`` so a builder reading either of
-the wrong fields fails this test.
+THE CRITICAL CORRECTNESS CONSTRAINT (F-002 + Connector #28): the unique provenance index spans
+ALL Sales Invoices via ``rt_external_id``. DP2 emits the ORIGINAL sale's ``externalId`` as the
+top-level anchor on a reversal work-item — so ``work_item.externalId == reversalOf.externalId ==
+sale.externalId`` (all the original sale's id). The per-reversal-distinct on-wire value is
+``workItemRef``. The reversing builder MUST write ``workItemRef`` into ``rt_external_id`` — NOT the
+top-level ``externalId`` (which is the original's). Writing the original's id would collide with the
+original SI's unique key and be FALSELY treated as a dup-recovery, silently echoing the original
+invoice with no credit note (#28). The fixture below now models the REAL wire: ``externalId`` is the
+SAME as the original (``POS-9001``) and ``workItemRef`` is the distinct discriminator, so a builder
+reading ``externalId`` instead of ``workItemRef`` fails this test.
 
 Pure dict-transform: no frappe, no ERPNext call. Composes on the forward builder so money
 conformance (FR-009) runs once on positive magnitudes; qty/amount are then negated.
@@ -25,10 +28,16 @@ from retail_tower_erpnext_connector.connector.posting import contracts as c
 from retail_tower_erpnext_connector.connector.posting import reversal_builder as rb
 
 
-# A reversal work-item where the top-level externalId ("POS-9002-RET") is DISTINCT from both
-# the sale snapshot's externalId AND reversalOf.externalId (both the original "POS-9001"). This
-# fixture design is load-bearing for the F-002 test (see module docstring).
-def _reversal_work_item(*, external_id: str = "POS-9002-RET", **overrides) -> c.PostingWorkItem:
+# A reversal work-item modeling the REAL DP2 wire (Connector #28): the top-level externalId is the
+# ORIGINAL sale's id ("POS-9001") — IDENTICAL to reversalOf.externalId AND sale.externalId. The
+# per-reversal-distinct value is workItemRef. This fixture design is load-bearing for the F-002/#28
+# test (see module docstring): distinctness is varied via `work_item_ref`, NOT `external_id`.
+def _reversal_work_item(
+	*,
+	work_item_ref: str = "55555555-5555-4555-8555-555555555555",
+	external_id: str = "POS-9001",
+	**overrides,
+) -> c.PostingWorkItem:
 	line = {
 		"lineName": "Item A",
 		"unitPrice": "100.00",
@@ -40,10 +49,10 @@ def _reversal_work_item(*, external_id: str = "POS-9002-RET", **overrides) -> c.
 		"erpnextItemRef": {"doctype": "Item", "name": "ITEM-A"},
 	}
 	wire = {
-		"workItemRef": "55555555-5555-4555-8555-555555555555",
+		"workItemRef": work_item_ref,  # the per-reversal-distinct discriminator (#28 re-key target)
 		"kind": "reversal",
 		"sourceSystem": "pos-pulse",
-		"externalId": external_id,
+		"externalId": external_id,  # DP2 emits the ORIGINAL sale's id here (NOT per-reversal-distinct)
 		"payloadHash": "b" * 64,
 		"businessDate": "2026-06-05",
 		"itemCursor": "cursor-2",
@@ -74,7 +83,7 @@ def _reversal_work_item_two_lines(lines: list[dict]) -> c.PostingWorkItem:
 		"workItemRef": "55555555-5555-4555-8555-555555555555",
 		"kind": "reversal",
 		"sourceSystem": "pos-pulse",
-		"externalId": "POS-9002-RET",
+		"externalId": "POS-9001",  # the ORIGINAL sale's id (real wire, #28)
 		"payloadHash": "b" * 64,
 		"businessDate": "2026-06-05",
 		"itemCursor": "cursor-2",
@@ -126,17 +135,29 @@ def _build(work_item=None, **kw):
 
 
 class TestF002ProvenanceIdentity:
-	def test_rt_external_id_is_work_item_own_external_id_not_original(self):
-		# THE HEADLINE TEST (F-002). The reversing doc's rt_external_id MUST be the reversal
-		# work-item's OWN top-level externalId ("POS-9002-RET"), NOT the original sale's
-		# ("POS-9001", carried in both reversalOf.externalId and the sale snapshot). A builder
-		# reading reversal_of.external_id OR sale.external_id would collide with the original SI's
-		# unique provenance slot and be falsely treated as dup-recovery.
+	def test_fixture_models_real_wire_external_id_is_the_original_sales(self):
+		# THE "false fixture corrected" guard (Connector #28). DP2 emits the ORIGINAL sale's id as
+		# the reversal's top-level externalId. Assert the fixture now matches that REAL wire shape:
+		# work_item.external_id == reversal_of.external_id == sale.external_id == "POS-9001", while
+		# work_item_ref is the distinct discriminator. The OLD fixture (distinct externalId) was a
+		# FALSE wire shape that masked the #28 bug.
+		wi = _reversal_work_item()
+		assert wi.external_id == "POS-9001"
+		assert wi.external_id == wi.reversal_of.external_id
+		assert wi.external_id == wi.sale.external_id
+		assert wi.work_item_ref != wi.external_id
+
+	def test_rt_external_id_is_work_item_ref_not_the_shared_external_id(self):
+		# THE HEADLINE TEST (Connector #28). The reversing doc's rt_external_id MUST be the reversal
+		# work-item's work_item_ref (the per-reversal-distinct on-wire value), NOT the top-level
+		# externalId — which is the ORIGINAL sale's id (also in reversalOf.externalId and the sale
+		# snapshot). A builder reading external_id would collide with the original SI's unique
+		# provenance slot, be falsely treated as dup-recovery, and silently echo the original invoice.
 		wi = _reversal_work_item()
 		doc = _build(wi)
-		assert doc["rt_external_id"] == "POS-9002-RET"
-		assert doc["rt_external_id"] == wi.external_id
-		# Explicitly prove neither wrong source was used.
+		assert doc["rt_external_id"] == wi.work_item_ref
+		# Explicitly prove the shared original-sale id was NOT used.
+		assert doc["rt_external_id"] != wi.external_id  # "POS-9001"
 		assert doc["rt_external_id"] != wi.reversal_of.external_id  # "POS-9001"
 		assert doc["rt_external_id"] != wi.sale.external_id  # "POS-9001"
 
@@ -246,17 +267,22 @@ class TestIsReturnAndReturnAgainst:
 
 class TestCardinalityNto1:
 	def test_two_reversals_sharing_one_original_get_distinct_rt_external_id(self):
-		# Reversal->original is N:1 (successive partial returns). Each reversal work-item has its
-		# OWN externalId / reversal key; the forward 1:1 must not bleed in. Two reversals of the
-		# same original sale produce DISTINCT rt_external_id.
-		doc_a = _build(_reversal_work_item(external_id="POS-9002-RET-A"))
-		doc_b = _build(_reversal_work_item(external_id="POS-9002-RET-B"))
-		assert doc_a["rt_external_id"] == "POS-9002-RET-A"
-		assert doc_b["rt_external_id"] == "POS-9002-RET-B"
+		# Reversal->original is N:1 (successive partial returns). Per the REAL wire (#28), both
+		# reversals SHARE the original sale's top-level externalId ("POS-9001"); distinctness comes
+		# ONLY from work_item_ref. Two reversals of the same original sale must still produce
+		# DISTINCT rt_external_id (else they'd collide in the unique provenance index).
+		wir_a = "55555555-5555-4555-8555-55555555000a"
+		wir_b = "55555555-5555-4555-8555-55555555000b"
+		doc_a = _build(_reversal_work_item(work_item_ref=wir_a))
+		doc_b = _build(_reversal_work_item(work_item_ref=wir_b))
+		assert doc_a["rt_external_id"] == wir_a
+		assert doc_b["rt_external_id"] == wir_b
 		assert doc_a["rt_external_id"] != doc_b["rt_external_id"]
-		# ...yet both target the same original (provenance of the reversed sale is shared).
-		wi_a = _reversal_work_item(external_id="POS-9002-RET-A")
-		wi_b = _reversal_work_item(external_id="POS-9002-RET-B")
+		# ...yet both carry the SAME top-level externalId (the original sale) — distinctness is NOT
+		# from external_id. This is exactly the #28 condition the re-key must survive.
+		wi_a = _reversal_work_item(work_item_ref=wir_a)
+		wi_b = _reversal_work_item(work_item_ref=wir_b)
+		assert wi_a.external_id == wi_b.external_id == "POS-9001"
 		assert wi_a.reversal_of.external_id == wi_b.reversal_of.external_id
 
 

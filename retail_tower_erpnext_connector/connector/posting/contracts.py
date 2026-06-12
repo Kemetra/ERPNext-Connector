@@ -196,7 +196,20 @@ class PostingWorkItem:
 
     @property
     def idempotency_key(self) -> tuple[str, str]:
-        """The 012 O-3 wire idempotency anchor — ``(sourceSystem, externalId)``."""
+        """The 012 O-3 wire idempotency anchor for a FORWARD ``sale_post`` — ``(sourceSystem, externalId)``.
+
+        FAIL-CLOSED for reversals (Connector #28): a reversal's top-level ``externalId`` is the
+        ORIGINAL sale's id, so ``(sourceSystem, externalId)`` is the PRE-FIX buggy anchor — keying a
+        reversal on it collides with the original sale's replay slot and silently echoes the original
+        invoice (silent mis-success). Reversals MUST key via ``idempotency.key_for`` /
+        ``idempotency.provenance_id`` (which re-key on ``workItemRef``). This property therefore raises
+        for any non-``sale_post`` kind rather than hand back the buggy anchor.
+        """
+        if self.kind != "sale_post":
+            raise ValueError(
+                "idempotency_key is the forward sale_post anchor only; reversals must key via "
+                "idempotency.key_for/provenance_id (see #28)"
+            )
         return (self.source_system, self.external_id)
 
 
