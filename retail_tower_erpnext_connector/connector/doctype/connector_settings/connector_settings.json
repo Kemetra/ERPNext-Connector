@@ -1,13 +1,18 @@
 {
  "actions": [],
  "creation": "2026-06-04 00:00:00.000000",
- "description": "Retail Tower connector configuration (spec 006 — sales posting). The DP2 posting-feed endpoint + auth token and the operator-owned mapping tables (unit→UOM, store→warehouse, store→customer) the scheduled poller reads each tick. The token is a secret (Password field, Gate G4 — never logged).",
+ "description": "Retail Tower connector configuration (spec 006 — sales posting; spec 007 — credential lifecycle). The DP2 posting-feed endpoint + auth token, the operator-owned mapping tables (unit→UOM, store→warehouse, store→customer) the scheduled poller reads each tick, and the registration-linked credential lifecycle (registration/credential refs + expiry) so the connector can warn before expiry instead of only reacting to a 401 (007 §5/§6). The token is a secret (Password field, Gate G4 — never logged); the lifecycle ids/timestamps are non-secret status.",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
   "dp2_section",
   "dp2_base_url",
   "dp2_token",
+  "credential_lifecycle_section",
+  "dp2_connector_registration_id",
+  "dp2_credential_id",
+  "dp2_credential_issued_at",
+  "dp2_credential_expires_at",
   "maps_section",
   "uom_map",
   "warehouse_map",
@@ -29,7 +34,36 @@
    "fieldname": "dp2_token",
    "fieldtype": "Password",
    "label": "DP2 Connector Token",
-   "description": "The opaque connectorBearer token (spec 003). SECRET — stored encrypted, read via get_password, never logged (Gate G4). Hand-issued DP2-side; the connector only presents it."
+   "description": "The opaque connectorBearer token (spec 003). SECRET — stored encrypted, read via get_password, never logged (Gate G4). Sourced from the once-shown IssuedCredential.secret (007 §5, E-1); still hand-configured DP2-side, the connector only presents it."
+  },
+  {
+   "fieldname": "credential_lifecycle_section",
+   "fieldtype": "Section Break",
+   "label": "Credential Lifecycle (007)"
+  },
+  {
+   "fieldname": "dp2_connector_registration_id",
+   "fieldtype": "Data",
+   "label": "DP2 Connector Registration Id",
+   "description": "The connector_registration id the active credential is linked to (007 §5, E-3). NON-SECRET identifier — survives credential rotation (a rotate swaps the token/credential id/expiry but leaves this unchanged). Lets the DP2-side list/audit correlate this instance."
+  },
+  {
+   "fieldname": "dp2_credential_id",
+   "fieldtype": "Data",
+   "label": "DP2 Credential Id",
+   "description": "The auth_tokens credential id (IssuedCredential.credential_id, 007 §5, E-1). NON-SECRET — identifies WHICH credential is configured, for rotate/revoke correlation. Not the secret itself (that is dp2_token)."
+  },
+  {
+   "fieldname": "dp2_credential_issued_at",
+   "fieldtype": "Datetime",
+   "label": "DP2 Credential Issued At",
+   "description": "Provenance of the current credential (IssuedCredential issue time, 007 §5). NON-SECRET — audit/correlation."
+  },
+  {
+   "fieldname": "dp2_credential_expires_at",
+   "fieldtype": "Datetime",
+   "label": "DP2 Credential Expires At",
+   "description": "The credential's bounded expiry (IssuedCredential.expires_at, server default 90 days, 007 §5/§6, E-1). NON-SECRET — drives the pre-expiry warning (G-2): the connector compares now() to this and surfaces 'credential expiring — request rotation' BEFORE a 401. The connector cannot self-rotate (admin surface is session-only)."
   },
   {
    "fieldname": "maps_section",
@@ -60,7 +94,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-06-06 00:00:00.000000",
+ "modified": "2026-06-12 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Connector",
  "name": "Connector Settings",
