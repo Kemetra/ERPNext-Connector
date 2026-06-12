@@ -278,6 +278,10 @@ NOT invent a separate wire correlation field — there is none (research Decisio
 
 ## 8. Revoked-Token Operator Behavior (T010)
 
+> **Extended by spec 007.** The *reactive-only* model below is preserved (the 401 handling is
+> unchanged), but the connector now ALSO records a registration-linked credential lifecycle and warns
+> *before* expiry. See [`connector-credential-lifecycle.md`](./connector-credential-lifecycle.md).
+
 When the connector's `connectorBearer` token is revoked by DP2 (mid-session or otherwise),
 subsequent pull and ack calls receive a generic, **non-disclosing** 401 refusal
 (`posting-feed.yaml`, response `Unauthorized`):

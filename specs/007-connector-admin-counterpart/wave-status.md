@@ -144,3 +144,32 @@ clean. **No commit/push/PR** until instructed (§5).
 *poller emit path* (`frappe.logger`) is inspection-only + `⏳ BENCH-VALIDATION`, like the sibling shells.
 
 **Changed files:** `credential_lifecycle.py` (+30), `poller.py` (+rename/+generalize), `test_credential_lifecycle.py` (+39).
+
+## Slice 4 — T4 docs closeout (2026-06-12, branch `docs/007-t4-closeout`)
+
+Docs-only. Records that the awaited DP-2 delivery landed and documents the D10 cutover — the
+post-dispatch owning-repo docs T4 calls for.
+
+- **T4a — `docs/decisions/connector-credential-lifecycle.md` (new):** the 007 decision doc. Records E-6
+  (DP-2's `connector` scope + 018 admin surface shipped), that the registration-linked + proactively-warned
+  model **supersedes** the reactive-only 003 §8 state machine (401 handling preserved), and the OQ-1/OQ-2
+  resolutions + #34/#35/#36 implementation status. **Closes** `connector-token-scope.md`'s "awaiting DP2
+  delivery".
+- **T4b — `docs/runbooks/connector-credential-cutover.md` (new):** the D10 operational runbook —
+  register → issue-linked → reconfigure → verify → revoke-legacy (spec §7), with the US4-enforcement
+  timing constraint, roles (human tenant-admin vs operator; the connector never calls the admin surface),
+  rollback, and the post-cutover rotation loop.
+- **Forward-pointers (light, signed records intact):** a one-line "extended by 007" note added to
+  `data-pulse-auth-and-api-policy.md` §8, and a "DP2 delivered / closed by 007" note to
+  `connector-token-scope.md` — NOT a rewrite of either signed 003 artifact.
+
+**Validation (local):** docs-only — forbidden-path audit **none** (no code/DocType/hooks/`.specify`); all
+four cross-doc relative links resolve to real files; no secret value in either new doc; `git diff --check`
+clean. **No commit/push/PR** until instructed (§5).
+
+**Spec 007 status after this slice:** all agent-codeable + docs work is done. Remaining is non-codeable:
+the `⏳ BENCH-VALIDATION` items (`bench migrate` + poller emit path), the T3 cutover (operational — per the
+new runbook), and **OQ-3** (admin-API-client home — owner cross-repo routing decision).
+
+**Changed files:** `connector-credential-lifecycle.md` (new), `connector-credential-cutover.md` (new),
+`data-pulse-auth-and-api-policy.md` (+1 note), `connector-token-scope.md` (+1 note).
