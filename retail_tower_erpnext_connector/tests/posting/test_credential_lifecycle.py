@@ -221,6 +221,45 @@ class TestBuildExpiryWarning:
         assert "Bearer" not in payload["detail"]
 
 
+class TestCheckRegistrationLink:
+    # OQ-2 (warn-only): mirror the US4 server-side link (E-4) as a LOCAL advisory. When a token is
+    # configured but no dp2_connector_registration_id is recorded, the credential is a legacy
+    # UNLINKED token — it still works until US4 enforcement is live (E-5), so we WARN, never block
+    # (a hard skip could halt a working token mid-cutover before US4 is live). Total fn: returns a
+    # payload to warn, or None. Takes only the token's PRESENCE (a bool), never the token value (S-1).
+    def test_unlinked_token_returns_warning(self):
+        payload = cl.check_registration_link(token_present=True, registration_id="")
+        assert payload is not None
+        assert payload["event"] == "posting.credential.unlinked"
+
+    def test_unlinked_token_none_registration_returns_warning(self):
+        payload = cl.check_registration_link(token_present=True, registration_id=None)
+        assert payload is not None
+        assert payload["event"] == "posting.credential.unlinked"
+
+    def test_linked_token_returns_none(self):
+        # Token + registration both present → properly linked → no warning.
+        assert cl.check_registration_link(token_present=True, registration_id="reg_abc") is None
+
+    def test_no_token_returns_none(self):
+        # No token configured at all is the unconfigured state (handled elsewhere by the
+        # base-url/token gate); the link invariant only fires when a token IS set but unlinked.
+        assert cl.check_registration_link(token_present=False, registration_id="") is None
+        assert cl.check_registration_link(token_present=False, registration_id=None) is None
+
+    def test_whitespace_only_registration_counts_as_unlinked(self):
+        # A registration id of only whitespace is not a real link — treat as empty.
+        payload = cl.check_registration_link(token_present=True, registration_id="   ")
+        assert payload is not None
+        assert payload["event"] == "posting.credential.unlinked"
+
+    def test_payload_carries_no_token(self):
+        # S-1 / G-4: the helper is given a bool, not the token — assert the message stays clean.
+        payload = cl.check_registration_link(token_present=True, registration_id="")
+        assert "Bearer" not in payload["detail"]
+        assert "register" in payload["detail"].lower()
+
+
 class TestRotationPreservesRegistration:
     # §6 / E-1/E-3: a rotate swaps the secret + credential id + expiry, but the registration id is
     # the STABLE identity that survives rotation. This guards the apply-the-rotation transform so a

@@ -114,3 +114,33 @@ sibling `_load_*` shells — its emit path runs on a real bench, not here.
 
 **Changed files:** `connector_settings.json` (+8), `credential_lifecycle.py` (+69), `poller.py` (+37),
 `test_credential_lifecycle.py` (+100), `test_connector_settings_shape.py` (+8).
+
+## Slice 3 — OQ-2 resolved: local link-invariant (warn-only) (2026-06-12, branch `feat/007-oq2-link-invariant`)
+
+OQ-2 decided by the owner: **adopt the local link-invariant as WARN-ONLY** (do not block). The DP-2 US4
+guard refuses an unlinked `connector`-scoped token server-side (E-4); this surfaces the same condition
+LOCALLY as an advisory. A hard skip was rejected because an unlinked legacy token still works until US4
+enforcement reaches the connector's environment (E-5), and the D10 cutover legitimately has the token set
+before the registration ref — a hard block would risk a self-inflicted outage on a working credential.
+*(Recorded here, NOT by editing `spec.md`'s OQ-2 — merged spec artifacts are a §3 gated surface.)*
+
+- **Pure helper (locally tested):** `credential_lifecycle.check_registration_link(token_present, registration_id)`
+  → `posting.credential.unlinked` payload when a token is set but no registration ref is recorded
+  (whitespace-only counts as empty), else `None`. **Total — never raises.** Takes only the token's
+  PRESENCE (a bool), never the token value (S-1 / Gate G4). 6 tests (unlinked / None-reg / linked /
+  no-token / whitespace / no-token-leak).
+- **Poller wiring (thin shell, ⏳ BENCH-VALIDATION):** the existing expiry-warning shell was generalized
+  and renamed `_warn_if_credential_expiring` → `_warn_credential_lifecycle`; it now runs BOTH advisory
+  checks (OQ-1 expiry + OQ-2 link), passing `token_present = bool(get_password("dp2_token").strip())` —
+  the bool, never the value. Both helpers are total, so the only thrower in the `try` is the frappe
+  reads → caught → `warn_check_failed`; both payloads are then `_safe`-scrubbed and logged. Never blocks.
+- **No gated surface this slice** — warn-only reuses existing fields; no DocType delta, no `hooks.py`.
+
+**Validation (local, fresh):** full pure-Python suite **192 passed** (6 new); ruff clean; `py_compile`
+clean (poller + lifecycle); forbidden-path audit — **none** (no gated surface touched); `git diff --check`
+clean. **No commit/push/PR** until instructed (§5).
+
+**Honest scope:** the OQ-2 *decision logic* is locally tested via the total `check_registration_link`; the
+*poller emit path* (`frappe.logger`) is inspection-only + `⏳ BENCH-VALIDATION`, like the sibling shells.
+
+**Changed files:** `credential_lifecycle.py` (+30), `poller.py` (+rename/+generalize), `test_credential_lifecycle.py` (+39).
