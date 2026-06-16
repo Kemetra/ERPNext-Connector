@@ -203,7 +203,9 @@ valuation / back-office; DP-2 stays the source of truth (Constitution §I/§III/
   Sales Invoice / outstanding-AR only … Payment Entry is deferred and gated until a
   DP2 tender/payment fact model, a 012 payment extension, idempotent Payment-Entry
   support, and payment repair/reconciliation semantics all land."* **009 is the
-  slice that lands that deferred Payment-Entry posting** — it does not re-post the
+  slice that lands the receivables / cash-application Payment-Entry posting**
+  (`consoleApplyPayment`) — distinct from the cash-at-till **tender** PE, which
+  remains a separately-deferred 006 / 012 item — and it does **not** re-post the
   invoice.
 - **E-4 (the 012 transport surface for settlement does NOT yet exist — CRITICAL-1).**
   `posting-feed.yaml` (`1.1.0-draft`) is the only DP-2↔Connector boundary
@@ -245,7 +247,15 @@ consumer that, when DP-2 projects an **approved** settlement posting command ont
 the 012 feed, posts the corresponding **ERPNext accounting document** — the
 **Payment Entry** for a cash application, and the claim / remittance valuation
 movements — keeping ERPNext as a reconciled valuation projection while DP-2 remains
-the operational source of truth. It is **idempotent** (012 ack semantics) and
+the operational source of truth.
+
+> **Two distinct deferred Payment Entries — do not conflate.** 009's Payment Entry is
+> the **cash-application** PE: a receivable settled later by a payer who is **not the
+> person at the counter** (`consoleApplyPayment`; DP-2 035 §1). It is **not** the
+> **cash-at-till tender** PE that 006 / 012 separately deferred (012 lines 46–52:
+> "008 models NO tender … deferred until a DP2 payments model lands"). The cash-at-till
+> tender PE remains a **separately-deferred 006 / 012 item** even after 009 ships; 009
+> scopes only the receivables / cash-application PE (FR-001), not the till-tender PE. It is **idempotent** (012 ack semantics) and
 **upgrade-safe** (Retail-Tower-terms mapping, never ERPNext doctype field names, so
 a v15→v16 change alters internal mapping only — 012 O-6).
 
