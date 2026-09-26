@@ -169,6 +169,10 @@ Owns:
 - fiscal extension points;
 - compatibility with ERPNext/Frappe upgrades.
 
+### Legacy name aliases
+
+Program shorthand and legacy names still found in constitutions, specs, and config/env identifiers (e.g. `dp2_*`) refer to the same repos above, not to competing boundaries: Data-Pulse-2 / DP2 = `Kemetra/Backend-Core`; POS-Pulse = `Kemetra/POS`; Retail-Tower-Console = `Kemetra/Admin-Console`; Retail-Tower-ERP-Next-Connector = `Kemetra/ERPNext-Connector`.
+
 ## 4. Architecture Invariants
 
 The normal integration path is:
@@ -274,10 +278,17 @@ Before repository work:
 git status --short
 git branch --show-current
 git fetch origin
+```
+
+If starting a new task from a clean state, then bring `main` current before branching:
+
+```bash
 git checkout main
 git pull --ff-only origin main
 git log -1 --oneline
 ```
+
+If resuming an existing task branch or working in a dedicated worktree, stay on it — do not check out `main` (it may already be checked out in another worktree) — and compare against `origin/main` instead: `git log -1 --oneline origin/main`.
 
 Then inspect:
 - the Jira issue;
@@ -490,8 +501,9 @@ Never report work as merged, deployed, verified, or complete unless the evidence
 
 # Retail Tower ERPNext Connector — Agent Context
 
-Custom Frappe / ERPNext connector app integrating Retail Tower OS (via Data-Pulse-2)
-with ERPNext. The Data-Pulse-2 repo is **read-only reference** for the Retail Tower side
+Custom Frappe / ERPNext connector app integrating Retail Tower OS (via Data-Pulse-2, i.e.
+`Kemetra/Backend-Core` — see the legacy name aliases in §3 above) with ERPNext. The
+Data-Pulse-2 / Backend-Core repo is **read-only reference** for the Retail Tower side
 of mappings — never edit it from here, never re-derive its model.
 
 ## Repo-specific read order
@@ -507,6 +519,8 @@ Bootstrap read order for every session:
 
 The Spec-Kit flow (specify → clarify → plan → tasks → analyze → implement) remains the spec-authoring process used within a Jira issue's scope; it does not replace Jira as the work-management authority. Do not duplicate standing-rules content here; `standing-rules.md` governs on engineering-gate questions.
 
+**Mapping standing-rules.md's forbidden-surface gate to Jira.** `standing-rules.md` §3 (forbidden surfaces) and §7 (stop conditions) still speak in terms of a retired "slice brief" providing `allowed_files`/`forbidden_files` and `[GATED]` approval. Since there is no slice brief under the RT operating model, map those clauses as follows: `allowed_files` = the scope stated in the Jira issue (RT operating instructions §8); `[GATED]` approval = explicit authorization written into the Jira issue or given by the owner (RT operating instructions §10); if the issue doesn't make the scope or gate status clear, that is the §14 stop condition "Jira scope is ambiguous" — stop and ask on the issue rather than proceeding or improvising a brief.
+
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
@@ -520,6 +534,6 @@ under `scheduler_events`, and the poller reads Connector Settings for `dp2_base_
 the UOM map, warehouse map, and store-customer map. Use
 `specs/006-sales-posting-adapter/wave-status.md` plus GitHub/main as the current evidence.
 
-Data-Pulse-2 backend repo (authoritative reference, read-only):
-`C:\Users\user\Documents\GitHub\Data-Pulse-2`.
+Data-Pulse-2 / Backend-Core repo (authoritative reference, read-only):
+`C:\Users\user\Documents\GitHub\Backend-Core`.
 <!-- SPECKIT END -->
