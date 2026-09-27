@@ -45,16 +45,19 @@ fixtures = [
 ]
 
 # The posting poller — pulls posting work-items from Data-Pulse-2, posts each to ERPNext,
-# and acks the outcome (T093). The job entrypoint lives in the posting module. Interval is
-# conservative; tune per operational load.
+# and acks the outcome (T093). The job entrypoint lives in the posting module. It runs every
+# minute (Frappe's finest cron granularity) for the RT-45 target of a sale reaching ERPNext in
+# <= ~1 minute; each run drains the whole pending backlog, and Frappe never overlaps two runs.
 scheduler_events = {
 	"cron": {
-		"*/5 * * * *": [
+		"* * * * *": [
 			"retail_tower_erpnext_connector.connector.posting.poller.run_posting_poll",
+		],
+		"*/5 * * * *": [
 			# The 019 bin-view poller — pulls wanted Bin-view reads from Data-Pulse-2,
 			# reads the live ERPNext Bin on-hand per warehouse, and reports the snapshot
 			# back (feeds the 017 stock reconciliation). On-hand QUANTITY only; no valuation.
 			"retail_tower_erpnext_connector.connector.bin_view.poller.run_bin_view_poll",
-		]
+		],
 	}
 }
