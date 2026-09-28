@@ -48,12 +48,25 @@ def ensure_posting_log_index() -> None:
 def ensure_sales_invoice_index() -> None:
 	"""Idempotently ensure the provenance Custom Fields and ``unique_rt_si_provenance`` on Sales Invoice.
 
-	Reuses the existing patch logic (it owns its column prerequisite and fails loud if the columns
-	cannot be created), so there is one definition of the index for both install and upgrade paths.
+	The Custom Field definitions come from the upgrade patch (one source of truth). The fields are
+	created and COMMITTED before the index DDL: inside ``after_migrate`` Frappe refuses an
+	``ALTER TABLE`` while the transaction holds uncommitted writes (``ImplicitCommitError``, seen on
+	the RT-58 bench), so the index goes through ``frappe.db.add_unique``, which commits first, the
+	same path as Posting Log.
 	"""
-	from retail_tower_erpnext_connector.patches import sales_invoice_unique_provenance
+	_ensure("Sales Invoice", SALES_INVOICE_INDEX, _create_sales_invoice_index)
 
-	_ensure("Sales Invoice", SALES_INVOICE_INDEX, sales_invoice_unique_provenance.execute)
+
+def _create_sales_invoice_index() -> None:
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
+
+	from retail_tower_erpnext_connector.patches import sales_invoice_unique_provenance as patch
+
+	create_custom_fields(patch._INDEXED_FIELDS, ignore_validate=True)
+	frappe.db.commit()
+	frappe.db.add_unique(
+		"Sales Invoice", ["rt_source_system", "rt_external_id"], constraint_name=SALES_INVOICE_INDEX
+	)
 
 
 def ensure_g5_indexes() -> None:
