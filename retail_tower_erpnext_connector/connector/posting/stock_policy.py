@@ -95,20 +95,29 @@ def link_void_to_original(
 
 	out = copy.deepcopy(dict(doc))
 	lines = out.get("items") or []
+	rows = _rows_in_line_order(lines, original_items)
+	for pos, (line, row) in enumerate(zip(lines, rows, strict=True), start=1):
+		_link_line(pos, line, row)
+	out["update_stock"] = 1 if int(original_update_stock or 0) else 0
+	return out
+
+
+def _rows_in_line_order(lines: Sequence[object], original_items: Sequence[Mapping[str, object]]) -> list:
+	"""Original rows ordered by ``idx``; fail closed unless there is exactly one per void line."""
 	rows = sorted(original_items, key=lambda r: int(r["idx"]))  # type: ignore[arg-type]
 	if len(lines) != len(rows):
 		raise ReturnLineMismatch(
 			f"void carries {len(lines)} line(s) but the original invoice has {len(rows)} row(s)"
 		)
+	return rows
 
-	for pos, (line, row) in enumerate(zip(lines, rows, strict=True), start=1):
-		_check_pair(pos, line, row)
-		line["sales_invoice_item"] = row["name"]
-		if row.get("warehouse"):
-			line["warehouse"] = row["warehouse"]
 
-	out["update_stock"] = 1 if int(original_update_stock or 0) else 0
-	return out
+def _link_line(pos: int, line: dict, row: Mapping[str, object]) -> None:
+	"""Check one void line against its original row, then link it and restore to the row's warehouse."""
+	_check_pair(pos, line, row)
+	line["sales_invoice_item"] = row["name"]
+	if row.get("warehouse"):
+		line["warehouse"] = row["warehouse"]
 
 
 def _check_pair(pos: int, line: Mapping[str, object], row: Mapping[str, object]) -> None:
