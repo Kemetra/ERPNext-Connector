@@ -172,9 +172,12 @@ sets the site up **in ERPNext Desk**. Retail Tower does not load stock or change
        RT-63.
    - When the zones disagree near midnight, or the POS clock runs ahead, the connector still keeps
      the posting date but clamps the time. It logs `posting.time_adjusted` at ERROR in
-     `retail_tower_posting.log`. A `clamped_*` or `capped_at_now` entry means this prerequisite
-     is broken; fix the timezone.
-     `raised_to_original` is expected only for invoices posted before RT-49.
+     `retail_tower_posting.log`. The listed adjustment tells you what to fix:
+     - `clamped_to_business_day_start` or `clamped_to_business_day_end`: the store and site
+       timezones disagree. Align them.
+     - `capped_at_now`: the POS or host clock is ahead of the ERPNext server. Fix the time sync on
+       the terminal. Do **not** change a timezone, because they may already match.
+     - `raised_to_original`: expected only for invoices posted before RT-49.
 
 Returns: a full void restores stock only if the original invoice moved it. Invoices posted
 before this change (`update_stock=0`) get an accounting-only credit note. Refunds never move
