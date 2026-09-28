@@ -88,15 +88,68 @@ sets the site up **in ERPNext Desk**. Retail Tower does not load stock or change
 
 6. **Confirm the exactly-once indexes exist (Gate G5) before go-live and after every upgrade.**
    Stock now moves inside the Sales Invoice submit, so a missing index duplicates **stock as well
-   as revenue** when a crash-window re-offer happens. In the RT-48 lab both indexes were absent
-   even though their patches were logged as applied; the root cause is tracked separately.
+   as revenue** when a crash-window re-offer happens.
+
+   Why they could be missing (RT-54): Frappe's `install-app` marks every `patches.txt` entry
+   completed **without running it**, and the indexes used to be created only by patches. Since
+   RT-58 the connector ensures both indexes itself, idempotently and failing loudly:
+   - the `after_install` and `after_migrate` hooks (`connector.schema`);
+   - the Posting Log `on_doctype_update`.
+
+   The posting poller also refuses to post while either index is missing. It logs
+   `posting.guard.missing_index`, sales stay pending in Data-Pulse-2, and nothing is lost or
+   duplicated. Still verify:
    ```sql
    SHOW INDEX FROM `tabSales Invoice` WHERE Key_name = 'unique_rt_si_provenance';  -- expect 2 rows
    SHOW INDEX FROM `tabPosting Log`   WHERE Key_name = 'unique_rt_posting_idem';   -- expect 2 rows
    ```
-   If either query returns no rows, **do not post**. Re-apply the patch modules
-   (`retail_tower_erpnext_connector.patches.sales_invoice_unique_provenance` /
-   `posting_log_unique_idem`, whose `execute()` is idempotent) and re-check.
+   If either returns no rows, run `bench --site <site> migrate`. `after_migrate` re-creates the
+   indexes.
+
+   If migrate then fails with `Gate G5: could not create …`, duplicate provenance rows already
+   exist. Find them:
+   ```sql
+   SELECT rt_source_system, rt_external_id, COUNT(*) FROM `tabSales Invoice`
+    WHERE rt_external_id IS NOT NULL GROUP BY 1, 2 HAVING COUNT(*) > 1;
+   SELECT source_system, external_id, COUNT(*) FROM `tabPosting Log`
+    GROUP BY 1, 2 HAVING COUNT(*) > 1;
+   ```
+   Resolve each duplicate as follows. Never delete rows; every step leaves an audit trail.
+
+   1. **Choose the surviving Sales Invoice.** This is the one the Posting Log row points to
+      (`document_name`) and that Data-Pulse-2 recorded as `documentRef`. The others are extras.
+      Deciding this is an **accounting and stock decision**.
+   2. **Cancel each extra Sales Invoice in ERPNext Desk.** This reverses its stock and GL.
+      Cancelling alone is **not enough**: a cancelled invoice keeps its provenance key, and the
+      unique index covers cancelled rows too.
+   3. **Re-tag the cancelled extra's provenance key** so it no longer conflicts, and leave an
+      audit comment. The field holds at most 200 characters, so the replacement is a short
+      bounded value derived from the row's own name, and the **original key is kept in the
+      comment**. In `bench --site <site> console`:
+      ```python
+      name = "<extra SI name>"
+      ext = frappe.db.get_value("Sales Invoice", name, "rt_external_id")
+      assert frappe.db.get_value("Sales Invoice", name, "docstatus") == 2  # cancelled first
+      frappe.db.set_value("Sales Invoice", name, "rt_external_id", f"g5-dup:{name}", update_modified=False)
+      frappe.get_doc("Sales Invoice", name).add_comment("Comment", f"Gate G5 dedupe: rt_external_id re-tagged from {ext!r} (duplicate of the surviving invoice).")
+      frappe.db.commit()
+      ```
+   4. **Posting Log duplicates.** Keep the row whose `document_name` is the surviving invoice.
+      Re-tag each other row. **Fetch that row's own key first**, and never delete it:
+      ```python
+      row = "<Posting Log row name>"
+      old = frappe.db.get_value("Posting Log", row, "external_id")
+      frappe.db.set_value("Posting Log", row, "external_id", f"g5-dup:{row}", update_modified=False)
+      frappe.get_doc("Posting Log", row).add_comment("Comment", f"Gate G5 dedupe: external_id re-tagged from {old!r}.")
+      frappe.db.commit()
+      ```
+   5. **Re-run `bench --site <site> migrate`,** confirm both `SHOW INDEX` checks return 2 rows,
+      and record the dedupe on the pilot issue. Posting resumes automatically on the next poller
+      tick.
+
+   If migrate reports `exists but is not UNIQUE on …`, an index with the right name has the
+   wrong definition (for example after a manual repair). Drop it
+   (`ALTER TABLE <table> DROP INDEX <name>`) and re-run `migrate`.
 
 Returns: a full void restores stock only if the original invoice moved it. Invoices posted
 before this change (`update_stock=0`) get an accounting-only credit note. Refunds never move

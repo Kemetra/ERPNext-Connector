@@ -36,6 +36,23 @@ def run_posting_poll() -> None:
     Conservative by design: bounded pages per tick, no self-retry (a transient ack returns control
     to DP2), and every page's per-item outcomes are recorded before any page-level alert.
     """
+    # RT-58 — never post without the Gate G5 exactly-once indexes (RT-54: a fresh install lacked
+    # them and a crash-window replay duplicated the SI and its stock movement). Skip the tick:
+    # sales stay pending in DP2 — nothing is rejected, lost or duplicated.
+    from ..schema import index_present
+    from .index_guard import evaluate
+
+    guard = evaluate(index_present)
+    if not guard.ok:
+        frappe.logger(_LOGGER).error(
+            {
+                "event": "posting.guard.missing_index",
+                "missing": list(guard.missing),
+                "detail": _safe(guard.error or ""),
+            }
+        )
+        return
+
     try:
         client, post_valid = _build_posting_path()
     except Exception as exc:  # config/auth not ready — log and skip this tick (no partial work).
