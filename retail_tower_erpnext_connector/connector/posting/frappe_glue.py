@@ -337,7 +337,9 @@ def _post_reversal(
     try:
         assert_reversal_supported(work_item)
     except UnsupportedReversal as exc:
-        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
+        return _recover_or_reject_unsupported(
+            work_item, key, exc, client=client, store=store, correlation_id=correlation_id
+        )
 
     # Build the reversing payload from the pure core (no frappe in the build). Same fail-closed
     # mapping as the forward path: unmapped unit → unmapped_unit; money/warehouse/store → validation;
@@ -455,6 +457,41 @@ def _post_reversal(
         idempotency_key=_ack_key(work_item, "posted"),
     )
     _log_signal("posting.posted", work_item, correlation_id, document_ref=document_ref.name)
+    return "posted"
+
+
+def _recover_or_reject_unsupported(
+    work_item: PostingWorkItem,
+    key,
+    exc: UnsupportedReversal,
+    *,
+    client: PostingFeedClient,
+    store: IdempotencyStore,
+    correlation_id: str,
+) -> str:
+    """Reject an unsupported reversal, unless its invoice already exists (RT-71; Codex P1, PR #46).
+
+    A legacy refund may have been submitted before RT-71 and then crashed before ``record_posted``:
+    the Posting Log has no row, so the replay guard missed it, but the Sales Invoice exists under
+    this work-item's provenance. Rejecting it would make DP2 disagree with ERPNext, and a later
+    ``re_post`` could credit the sale twice. So resolve that invoice first and ack it ``posted``
+    (back-filling the Posting Log), exactly like the duplicate-provenance recovery. Otherwise nothing
+    was posted, and the reversal is rejected as ``validation``.
+    """
+    existing = _find_posted_invoice(work_item)
+    if existing is None:
+        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
+    document_ref = existing
+    try:
+        store.record_posted(key, document_ref)
+    except IdempotencyConflict as conflict:
+        document_ref = conflict.existing
+    client.ack_outcome(
+        work_item.work_item_ref,
+        OutcomeAckRequest.posted(document_ref),
+        idempotency_key=_ack_key(work_item, "posted"),
+    )
+    _log_signal("posting.recovered", work_item, correlation_id, document_ref=document_ref.name)
     return "posted"
 
 

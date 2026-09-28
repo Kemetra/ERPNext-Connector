@@ -10,7 +10,6 @@ ACC-SINV-2026-00028 = -24.00 against a 24.00 sale). Until line-aware returns lan
 the connector must reject refunds instead of posting them.
 """
 
-import re
 
 import pytest
 
@@ -94,9 +93,5 @@ class TestGlueOrdering:
 		policy = body.index("assert_reversal_supported(work_item)")
 		build = body.index("build_reversing_invoice(")
 		assert replay < policy < build
-
-	def test_an_unsupported_reversal_is_rejected_as_validation(self):
-		body = self._reversal_source()
-		handler = re.search(r"except UnsupportedReversal as exc:\s*\n\s*return _reject\(([^)]*)\)", body)
-		assert handler is not None
-		assert "FailureKind.VALIDATION" in handler.group(1)
+		# The validation rejection and the crash-window recovery are exercised in
+		# test_refund_containment_glue.py (the real glue against a frappe stand-in).

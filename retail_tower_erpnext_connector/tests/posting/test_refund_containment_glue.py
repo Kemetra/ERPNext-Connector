@@ -1,0 +1,191 @@
+# Copyright (c) 2026, Retail Tower OS and contributors
+# For license information, please see license.txt
+
+"""RT-71 — executable coverage of the refund containment in the REAL glue (no bench).
+
+``frappe_glue`` imports frappe, so it is loaded here against a minimal stand-in module that
+provides only what the refund path touches: ``db.get_value`` (the provenance lookup), ``logger``,
+``ValidationError`` and ``exceptions``. ``get_doc`` fails the test if called, which proves no
+Sales Invoice is built or submitted. The stand-in is removed afterwards, and any real ``frappe`` /
+``frappe_glue`` modules are restored.
+
+Cases (Greptile P2 + Codex P1, PR #46):
+  - a refund with nothing posted is rejected as ``validation`` and posts nothing;
+  - a legacy refund whose invoice exists but whose Posting Log row is missing (crash window) is
+    recovered and acked ``posted``, never rejected;
+  - an already-recorded legacy refund still replays its document.
+"""
+
+import importlib
+import sys
+import types
+
+import pytest
+
+from retail_tower_erpnext_connector.connector.posting import contracts as c
+from retail_tower_erpnext_connector.connector.posting.contracts import ErpnextDocumentRef
+
+_GLUE = "retail_tower_erpnext_connector.connector.posting.frappe_glue"
+_PKG = "retail_tower_erpnext_connector.connector.posting"
+_MISSING = object()
+
+
+class _Logger:
+	def __init__(self):
+		self.records = []
+
+	def info(self, record):
+		self.records.append(("info", record))
+
+	def warning(self, record):
+		self.records.append(("warning", record))
+
+	def error(self, record):
+		self.records.append(("error", record))
+
+
+class _Frappe(types.ModuleType):
+	def __init__(self, posted_name=None):
+		super().__init__("frappe")
+		self.ValidationError = type("ValidationError", (Exception,), {})
+		self.exceptions = types.SimpleNamespace()
+		self.lookups = []
+		self._logger = _Logger()
+		self.logger = lambda name=None: self._logger
+		self.db = types.SimpleNamespace(get_value=self._get_value)
+		self._posted_name = posted_name
+
+	def _get_value(self, doctype, filters, field, **_):
+		self.lookups.append((doctype, dict(filters), field))
+		return self._posted_name
+
+	def get_doc(self, *_args, **_kwargs):
+		pytest.fail("a refund must never build or submit a Sales Invoice")
+
+
+class _Client:
+	def __init__(self):
+		self.acks = []
+
+	def ack_outcome(self, ref, request, idempotency_key):
+		self.acks.append({"ref": ref, "ack": request.to_wire(), "key": idempotency_key})
+
+
+class _Store:
+	def __init__(self, recorded=None):
+		self.recorded = recorded
+		self.writes = []
+
+	def get_document_ref(self, key):
+		return self.recorded
+
+	def record_posted(self, key, ref):
+		self.writes.append((key, ref))
+
+
+@pytest.fixture
+def load_glue():
+	saved = {name: sys.modules.get(name, _MISSING) for name in ("frappe", _GLUE)}
+	pkg = importlib.import_module(_PKG)
+	saved_attr = getattr(pkg, "frappe_glue", _MISSING)
+
+	def _load(fake):
+		sys.modules["frappe"] = fake
+		sys.modules.pop(_GLUE, None)
+		return importlib.import_module(_GLUE)
+
+	yield _load
+	for name, module in saved.items():
+		if module is _MISSING:
+			sys.modules.pop(name, None)
+		else:
+			sys.modules[name] = module
+	if saved_attr is _MISSING:
+		if hasattr(pkg, "frappe_glue"):
+			delattr(pkg, "frappe_glue")
+	else:
+		pkg.frappe_glue = saved_attr
+
+
+def _refund() -> c.PostingWorkItem:
+	return c.PostingWorkItem.from_wire(
+		{
+			"workItemRef": "44444444-4444-4444-8444-444444444444",
+			"kind": "reversal",
+			"sourceSystem": "pos-pulse",
+			"externalId": "POS-9001",
+			"payloadHash": "b" * 64,
+			"businessDate": "2026-06-05",
+			"itemCursor": "cursor-2",
+			"reversalOf": {"sourceSystem": "pos-pulse", "externalId": "POS-9001", "reversalKind": "refund"},
+			"sale": {
+				"saleRef": "22222222-2222-4222-8222-222222222222",
+				"storeId": "33333333-3333-4333-8333-333333333333",
+				"currencyCode": "EGP",
+				"posTotal": "200.00",
+				"occurredAt": "2026-06-01T10:00:00Z",
+				"businessDate": "2026-06-01",
+				"sourceSystem": "pos-pulse",
+				"externalId": "POS-9001",
+				"lines": [
+					{
+						"lineName": "Item A",
+						"unitPrice": "100.00",
+						"currencyCode": "EGP",
+						"quantity": "2",
+						"lineAmount": "200.00",
+						"unit": "each",
+						"erpnextItemRef": {"doctype": "Item", "name": "ITEM-A"},
+					}
+				],
+			},
+		}
+	)
+
+
+def _post(glue, store, client):
+	return glue.post_work_item(
+		_refund(),
+		client=client,
+		store=store,
+		uom_map=None,
+		warehouses=None,
+		customers=None,
+		correlation_id="rt71-test",
+	)
+
+
+class TestRefundContainmentInGlue:
+	def test_refund_with_nothing_posted_is_rejected_and_posts_nothing(self, load_glue):
+		fake = _Frappe(posted_name=None)
+		glue = load_glue(fake)
+		client, store = _Client(), _Store()
+		assert _post(glue, store, client) == "permanently_rejected"
+		(ack,) = client.acks
+		assert ack["ack"]["outcome"] == "permanently_rejected"
+		assert ack["ack"]["reason"]["category"] == "validation"
+		assert store.writes == []
+
+	def test_crash_window_legacy_refund_is_recovered_not_rejected(self, load_glue):
+		# The invoice exists under this reversal's provenance, but the Posting Log row is missing.
+		fake = _Frappe(posted_name="ACC-SINV-2026-00028")
+		glue = load_glue(fake)
+		client, store = _Client(), _Store()
+		assert _post(glue, store, client) == "posted"
+		(ack,) = client.acks
+		assert ack["ack"]["outcome"] == "posted"
+		assert ack["ack"]["documentRef"]["name"] == "ACC-SINV-2026-00028"
+		assert [ref.name for _key, ref in store.writes] == ["ACC-SINV-2026-00028"]  # back-filled
+		# The lookup used the reversal's own provenance (work_item_ref), never the sale's id.
+		(_doctype, filters, _field), = fake.lookups
+		assert filters["rt_external_id"] == "44444444-4444-4444-8444-444444444444"
+		assert filters["docstatus"] == 1
+
+	def test_recorded_legacy_refund_still_replays(self, load_glue):
+		fake = _Frappe(posted_name=None)
+		glue = load_glue(fake)
+		client = _Client()
+		store = _Store(recorded=ErpnextDocumentRef(doctype="Sales Invoice", name="ACC-SINV-2026-00028"))
+		assert _post(glue, store, client) == "posted"
+		assert client.acks[0]["ack"]["documentRef"]["name"] == "ACC-SINV-2026-00028"
+		assert fake.lookups == []  # the replay guard answered first
