@@ -168,7 +168,8 @@ sets the site up **in ERPNext Desk**. Retail Tower does not load stock or change
      - **Void:** the same date and time as its sale, raised to the original invoice's timestamp
        if that is later. A void therefore posts in its sale's fiscal day. A late void is
        back-dated, which makes ERPNext run a Repost Item Valuation, and it is rejected if that
-       period is closed.
+       period is closed. Giving voids and refunds their own time is planned contract-first in
+       RT-63.
    - When the zones disagree near midnight, or the POS clock runs ahead, the connector still keeps
      the posting date but clamps the time. It logs `posting.time_adjusted` at ERROR in
      `retail_tower_posting.log`. A `clamped_*` or `capped_at_now` entry means this prerequisite
