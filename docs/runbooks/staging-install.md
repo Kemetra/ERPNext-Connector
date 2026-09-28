@@ -123,19 +123,24 @@ sets the site up **in ERPNext Desk**. Retail Tower does not load stock or change
       Cancelling alone is **not enough**: a cancelled invoice keeps its provenance key, and the
       unique index covers cancelled rows too.
    3. **Re-tag the cancelled extra's provenance key** so it no longer conflicts, and leave an
-      audit comment. In `bench --site <site> console`:
+      audit comment. The field holds at most 200 characters, so the replacement is a short
+      bounded value derived from the row's own name, and the **original key is kept in the
+      comment**. In `bench --site <site> console`:
       ```python
       name = "<extra SI name>"
       ext = frappe.db.get_value("Sales Invoice", name, "rt_external_id")
       assert frappe.db.get_value("Sales Invoice", name, "docstatus") == 2  # cancelled first
-      frappe.db.set_value("Sales Invoice", name, "rt_external_id", f"{ext}:dup-cancelled-{name}", update_modified=False)
-      frappe.get_doc("Sales Invoice", name).add_comment("Comment", f"Gate G5 dedupe: provenance re-tagged from {ext} (duplicate of the surviving invoice).")
+      frappe.db.set_value("Sales Invoice", name, "rt_external_id", f"g5-dup:{name}", update_modified=False)
+      frappe.get_doc("Sales Invoice", name).add_comment("Comment", f"Gate G5 dedupe: rt_external_id re-tagged from {ext!r} (duplicate of the surviving invoice).")
       frappe.db.commit()
       ```
    4. **Posting Log duplicates.** Keep the row whose `document_name` is the surviving invoice.
-      Re-tag the others the same way, never delete them:
+      Re-tag each other row. **Fetch that row's own key first**, and never delete it:
       ```python
-      frappe.db.set_value("Posting Log", "<row name>", "external_id", f"{ext}:dup-{'<row name>'}", update_modified=False)
+      row = "<Posting Log row name>"
+      old = frappe.db.get_value("Posting Log", row, "external_id")
+      frappe.db.set_value("Posting Log", row, "external_id", f"g5-dup:{row}", update_modified=False)
+      frappe.get_doc("Posting Log", row).add_comment("Comment", f"Gate G5 dedupe: external_id re-tagged from {old!r}.")
       frappe.db.commit()
       ```
    5. **Re-run `bench --site <site> migrate`,** confirm both `SHOW INDEX` checks return 2 rows,

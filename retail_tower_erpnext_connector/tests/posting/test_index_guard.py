@@ -55,6 +55,16 @@ class TestIndexMatches:
 	def test_wrong_columns_do_not_match(self):
 		assert ig.index_matches(_rows(("rt_source_system",)), _SI[2]) is False
 
+	def test_prefix_unique_index_does_not_match(self):
+		# Codex P2 (PR #43): a UNIQUE prefix index (col(20), col(20)) would make distinct valid ids that
+		# share a prefix collide. Only full-column indexes (Sub_part NULL) count.
+		rows = [{**r, "Sub_part": 20} for r in _rows(_SI[2])]
+		assert ig.index_matches(rows, _SI[2]) is False
+
+	def test_full_column_rows_with_explicit_null_sub_part_match(self):
+		rows = [{**r, "Sub_part": None} for r in _rows(_SI[2])]
+		assert ig.index_matches(rows, _SI[2]) is True
+
 	def test_wrong_column_order_does_not_match(self):
 		assert ig.index_matches(_rows(tuple(reversed(_SI[2]))), _SI[2]) is False
 

@@ -50,7 +50,8 @@ def index_matches(rows: Sequence[Mapping[str, object]], columns: Sequence[str]) 
 
 
 def _all_unique(rows: Sequence[Mapping[str, object]]) -> bool:
-	return all(int(r.get("Non_unique") or 0) == 0 for r in rows)
+	"""Every part is UNIQUE and covers the FULL column (a prefix ``Sub_part`` would collide ids)."""
+	return all(int(r.get("Non_unique") or 0) == 0 and r.get("Sub_part") is None for r in rows)
 
 
 def evaluate(
