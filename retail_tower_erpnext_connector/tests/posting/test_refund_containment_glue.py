@@ -83,11 +83,21 @@ class _Store:
 		self.writes.append((key, ref))
 
 
+def _restore(namespace: dict, name: str, value) -> None:
+	"""Put ``namespace[name]`` back to ``value``, or remove it if it was absent before the test."""
+	namespace.pop(name, None)
+	if value is not _MISSING:
+		namespace[name] = value
+
+
 @pytest.fixture
 def load_glue():
-	saved = {name: sys.modules.get(name, _MISSING) for name in ("frappe", _GLUE)}
 	pkg = importlib.import_module(_PKG)
-	saved_attr = getattr(pkg, "frappe_glue", _MISSING)
+	saved = [
+		(sys.modules, "frappe", sys.modules.get("frappe", _MISSING)),
+		(sys.modules, _GLUE, sys.modules.get(_GLUE, _MISSING)),
+		(vars(pkg), "frappe_glue", vars(pkg).get("frappe_glue", _MISSING)),
+	]
 
 	def _load(fake):
 		sys.modules["frappe"] = fake
@@ -95,16 +105,8 @@ def load_glue():
 		return importlib.import_module(_GLUE)
 
 	yield _load
-	for name, module in saved.items():
-		if module is _MISSING:
-			sys.modules.pop(name, None)
-		else:
-			sys.modules[name] = module
-	if saved_attr is _MISSING:
-		if hasattr(pkg, "frappe_glue"):
-			delattr(pkg, "frappe_glue")
-	else:
-		pkg.frappe_glue = saved_attr
+	for namespace, name, value in saved:
+		_restore(namespace, name, value)
 
 
 def _refund() -> c.PostingWorkItem:
