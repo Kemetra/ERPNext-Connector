@@ -373,3 +373,44 @@ class TestRejectsSalePost:
 			rb.build_reversing_invoice(
 				sale_post, uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
 			)
+
+
+def _void_work_item() -> c.PostingWorkItem:
+	"""The default reversal fixture, re-kinded to a FULL VOID (reversalKind=void)."""
+	wi = _reversal_work_item()
+	return c.PostingWorkItem(
+		work_item_ref=wi.work_item_ref,
+		kind=wi.kind,
+		source_system=wi.source_system,
+		external_id=wi.external_id,
+		payload_hash=wi.payload_hash,
+		business_date=wi.business_date,
+		sale=wi.sale,
+		item_cursor=wi.item_cursor,
+		reversal_of=c.ReversalRef(
+			source_system=wi.reversal_of.source_system,
+			external_id=wi.reversal_of.external_id,
+			reversal_kind="void",
+		),
+	)
+
+
+class TestStockEffectByReversalKind:
+	"""RT-48 (owner decision RT-47 D5): only a FULL VOID restores stock in this implementation.
+
+	A refund is amount-only today (RecordRefundRequest carries no lines) while this builder negates
+	EVERY sale line, so a refund with update_stock=1 would restock the full sold quantity. Refund
+	stock semantics are deferred to RT-14/RT-16, so a refund credit note MUST NOT move stock.
+	"""
+
+	def test_refund_credit_note_never_moves_stock(self):
+		doc = _build()  # the default fixture is reversalKind=refund
+		assert doc["update_stock"] == 0
+
+	def test_void_return_invoice_moves_stock_by_default(self):
+		# Default 1: the glue MIRRORS the original's update_stock before insert (stock_policy). If that
+		# step were ever skipped against a legacy update_stock=0 original, ERPNext refuses the return
+		# loudly ("'Update Stock' can not be checked…") rather than silently restoring nothing.
+		doc = _build(_void_work_item())
+		assert doc["update_stock"] == 1
+		assert doc["is_return"] == 1

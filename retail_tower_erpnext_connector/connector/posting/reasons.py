@@ -18,12 +18,16 @@ Per the posting decision table (resolution-concepts.md §3):
   - other non-retryable error      → ``other``         (row 9)
 
 Failure messages are scrubbed of secret/token/credential substrings before they leave the
-process (Principle V / Gate G4). This module imports NO frappe.
+process (Principle V / Gate G4). They are also reduced to plain text and bounded to the DP2 ack
+contract's ``reason.message`` length (1..1000, RT-48): ERPNext validation messages can be long
+HTML, and an over-long reason is refused by DP2, which would leave the item re-offered every tick.
+This module imports NO frappe.
 """
 
 from __future__ import annotations
 
 import enum
+import html
 import re
 
 from .contracts import RejectionReason
@@ -77,12 +81,34 @@ def scrub_message(message: str) -> str:
     return scrubbed
 
 
+# DP2 outcome-ack contract: RejectionReason.message is 1..1000 chars (outcome-ack.dto.ts).
+REASON_MESSAGE_MAX = 1000
+_EMPTY_REASON = "(no detail)"
+# Block-level tags become a space (so "a<br>b" stays two words); every other tag is dropped.
+_BLOCK_TAG_RE = re.compile(r"(?i)<\s*/?\s*(br|p|div|li|ul|ol|tr|td|th|h[1-6])\b[^>]*>")
+_ANY_TAG_RE = re.compile(r"<[^>]*>")
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def plain_bounded_message(message: str) -> str:
+    """Plain-text, secret-scrubbed, whitespace-collapsed message within the ack length bounds."""
+    text = _ANY_TAG_RE.sub("", _BLOCK_TAG_RE.sub(" ", message))
+    text = _WHITESPACE_RE.sub(" ", html.unescape(text)).strip()
+    text = scrub_message(text)
+    if not text:
+        return _EMPTY_REASON
+    if len(text) > REASON_MESSAGE_MAX:
+        text = text[: REASON_MESSAGE_MAX - 1].rstrip() + "…"
+    return text
+
+
 def to_rejection_reason(kind: FailureKind, *, message: str) -> RejectionReason:
     """Build a 012 ``RejectionReason`` for a non-retryable failure.
 
     Raises :class:`UnmappedFailureKind` for an unrecognised kind (never invents a category).
-    The message is scrubbed of secrets (Gate G4).
+    The message is scrubbed of secrets (Gate G4), reduced to plain text and bounded to the ack
+    contract length (RT-48).
     """
     if not isinstance(kind, FailureKind) or kind not in _CATEGORY_BY_KIND:
         raise UnmappedFailureKind(f"no 012 category for failure kind {kind!r} (FR-007)")
-    return RejectionReason(category=_CATEGORY_BY_KIND[kind], message=scrub_message(message))
+    return RejectionReason(category=_CATEGORY_BY_KIND[kind], message=plain_bounded_message(message))
