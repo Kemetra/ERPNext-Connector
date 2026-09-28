@@ -490,7 +490,7 @@ def _guard_tracked_items(
 
 
 def _read_original_invoice(name: str) -> tuple[int, list[dict]]:
-    """Read the original SI's ``update_stock`` and its item rows ``(name, item_code, qty, idx)`` (RT-48).
+    """Read the original SI's ``update_stock`` and its item rows ``(name, item_code, qty, idx, warehouse)`` (RT-48).
 
     ⏳ BENCH-VALIDATION. Feeds the pure ``stock_policy.link_void_to_original``.
     """
@@ -498,7 +498,7 @@ def _read_original_invoice(name: str) -> tuple[int, list[dict]]:
     rows = frappe.get_all(
         "Sales Invoice Item",
         filters={"parent": name, "parenttype": "Sales Invoice"},
-        fields=["name", "item_code", "qty", "idx"],
+        fields=["name", "item_code", "qty", "idx", "warehouse"],
         order_by="idx asc",
     )
     return int(update_stock or 0), [dict(row) for row in rows]

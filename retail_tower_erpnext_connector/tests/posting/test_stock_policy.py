@@ -118,6 +118,20 @@ class TestVoidLinkage:
 		with pytest.raises(sp.ReturnLineMismatch):
 			_link(original_items=rows)
 
+	def test_each_line_restores_stock_to_the_original_rows_warehouse(self):
+		# Codex P1 (PR #42): if the store→warehouse map changed between the sale and its void, the
+		# builder stamps the CURRENT mapped warehouse. The void must restore stock where the sale
+		# took it from, otherwise the depleted warehouse is never credited.
+		rows = [
+			{**_original_rows()[0], "warehouse": "Old Store - RT"},
+			{**_original_rows()[1], "warehouse": "Old Store - RT"},
+		]
+		doc = _doc(is_return=1)
+		for item in doc["items"]:
+			item["warehouse"] = "New Store - RT"
+		out = _link(doc, original_items=rows)
+		assert [i["warehouse"] for i in out["items"]] == ["Old Store - RT", "Old Store - RT"]
+
 	def test_rejects_a_non_return_document(self):
 		with pytest.raises(ValueError):
 			_link(_doc(is_return=0))

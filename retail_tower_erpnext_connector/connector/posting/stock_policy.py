@@ -62,14 +62,16 @@ def assert_no_tracked_items(doc: Mapping[str, object], tracking: Mapping[str, Ma
 	"""
 	if not doc.get("update_stock"):
 		return
-	tracked = [
-		code
-		for code in tracking_item_codes(doc)
-		if code in tracking
-		and (int(tracking[code].get("has_batch_no") or 0) or int(tracking[code].get("has_serial_no") or 0))
-	]
+	tracked = [code for code in tracking_item_codes(doc) if _is_tracked(tracking.get(code))]
 	if tracked:
 		raise UnsupportedTrackedItem(tracked)
+
+
+def _is_tracked(flags: Mapping[str, object] | None) -> bool:
+	"""True if an Item's master flags mark it batch- or serial-tracked (absent Item → False)."""
+	if not flags:
+		return False
+	return bool(int(flags.get("has_batch_no") or 0) or int(flags.get("has_serial_no") or 0))
 
 
 def link_void_to_original(
@@ -81,10 +83,12 @@ def link_void_to_original(
 	"""Return a copy of the void return ``doc`` mirrored onto and linked to its original invoice.
 
 	- ``update_stock`` := the original's (never restore stock the sale did not move).
-	- each return line gets ``sales_invoice_item`` = the original row at the same position
-	  (original rows ordered by ``idx``), after checking the row count, ``item_code`` and the exact
-	  quantity (a full void restores EXACTLY the sold quantity; compared as :class:`Decimal` from the
-	  string form, never float). Any mismatch raises :class:`ReturnLineMismatch`.
+	- each return line is paired with the original row at the same position (rows ordered by
+	  ``idx``; DP2 emits sale and reversal lines in the same ``ORDER BY sale_lines.id``), checked
+	  for ``item_code`` and exact quantity (:func:`_check_pair`), then gets ``sales_invoice_item``
+	  and the ORIGINAL row's warehouse, so stock goes back where the sale took it from even if the
+	  store→warehouse map changed since (Codex P1, PR #42). Any mismatch raises
+	  :class:`ReturnLineMismatch`.
 	"""
 	if not doc.get("is_return"):
 		raise ValueError("link_void_to_original expects a return (is_return=1) document")
@@ -98,17 +102,28 @@ def link_void_to_original(
 		)
 
 	for pos, (line, row) in enumerate(zip(lines, rows, strict=True), start=1):
-		if line["item_code"] != row["item_code"]:
-			raise ReturnLineMismatch(
-				f"void line {pos} item {line['item_code']!r} != original row item {row['item_code']!r}"
-			)
-		returned = abs(Decimal(str(line["qty"])))
-		sold = abs(Decimal(str(row["qty"])))
-		if returned != sold:
-			raise ReturnLineMismatch(
-				f"void line {pos} quantity {returned} != original sold quantity {sold} (full void only)"
-			)
+		_check_pair(pos, line, row)
 		line["sales_invoice_item"] = row["name"]
+		if row.get("warehouse"):
+			line["warehouse"] = row["warehouse"]
 
 	out["update_stock"] = 1 if int(original_update_stock or 0) else 0
 	return out
+
+
+def _check_pair(pos: int, line: Mapping[str, object], row: Mapping[str, object]) -> None:
+	"""Fail closed unless a void line matches its original row's Item and exact sold quantity.
+
+	A full void restores EXACTLY the sold quantity; both sides are compared as :class:`Decimal`
+	built from their string form (the DB row's qty is a float), never float-vs-string.
+	"""
+	if line["item_code"] != row["item_code"]:
+		raise ReturnLineMismatch(
+			f"void line {pos} item {line['item_code']!r} != original row item {row['item_code']!r}"
+		)
+	returned = abs(Decimal(str(line["qty"])))
+	sold = abs(Decimal(str(row["qty"])))
+	if returned != sold:
+		raise ReturnLineMismatch(
+			f"void line {pos} quantity {returned} != original sold quantity {sold} (full void only)"
+		)
