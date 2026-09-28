@@ -10,7 +10,9 @@ document payload the connector will submit. It:
     deliberately NO item-resolution hook (rider R2 / FR-001); the only injected callables are
     a UOM resolver (FR-008) and a warehouse resolver (FR-010, applying the DP2-pre-resolved id);
   - keeps every monetary value an **exact-decimal string** (never float — FR-009);
-  - carries ``businessDate`` → ``posting_date`` (never the connector's post-time — T033);
+  - carries ``businessDate`` → ``posting_date`` (never the connector's post-time — T033) with
+    ``set_posting_time = 1`` so ERPNext keeps it, and ``posting_time`` from ``occurredAt``
+    (RT-49 rule, ``posting_time.stamp_for``; ERPNext would otherwise overwrite both with "now");
   - addresses everything generically (``item_code`` / ``Warehouse`` name — FR-002, Principle II);
   - posts with ``update_stock=1`` (RT-48, owner decision RT-47 D1): the Sales Invoice IS the
     stock-moving document. ERPNext writes the Stock Ledger Entries inside the SAME submit, so the
@@ -26,6 +28,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from .contracts import PostingWorkItem
+from .posting_time import UTC_CLOCK, PostingStamp, apply_stamp, stamp_for
 
 
 class UnmappedUnit(Exception):
@@ -46,6 +49,7 @@ def build_sales_invoice(
     uom_for: Callable[[str], str],
     warehouse_for: Callable[[str], dict],
     customer_for: Callable[[str], str],
+    posting_stamp: PostingStamp | None = None,
 ) -> dict:
     """Build the ERPNext Sales-Invoice payload for one ``sale_post`` work-item.
 
@@ -55,6 +59,8 @@ def build_sales_invoice(
     ``customer_for(store_id) -> customer`` resolves the operator-configured store→Customer map
     (F-009; raises :class:`uom.UnmappedStore` on a miss — the builder NEVER fabricates a
     customer, which would hide a config gap; Principle VI).
+    ``posting_stamp`` is the RT-49 posting date/time; the glue computes it with the ERPNext site
+    clock. Without one, it is derived from ``occurredAt`` in UTC (``posting_time.UTC_CLOCK``).
     """
     sale = work_item.sale
     warehouse = warehouse_for(sale.store_id)
@@ -86,8 +92,6 @@ def build_sales_invoice(
         "doctype": "Sales Invoice",
         "customer": customer,
         "currency": sale.currency_code,
-        # businessDate drives the fiscal period — never the connector's post-time (T033).
-        "posting_date": sale.business_date,
         # Provenance for idempotency + audit (O-3); carried on custom fields.
         "rt_source_system": sale.source_system,
         "rt_external_id": sale.external_id,
@@ -103,4 +107,7 @@ def build_sales_invoice(
     from .uom import assert_money_conformance
 
     assert_money_conformance(doc)
-    return doc
+    # businessDate drives the fiscal period — never the connector's post-time (T033). RT-49:
+    # set_posting_time=1, or ERPNext overwrites posting_date/posting_time with "now".
+    stamp = posting_stamp or stamp_for(sale.occurred_at, sale.business_date, UTC_CLOCK)
+    return apply_stamp(doc, stamp)
