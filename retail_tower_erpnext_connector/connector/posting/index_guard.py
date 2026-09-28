@@ -12,20 +12,21 @@ Posting is exactly-once only while BOTH composite unique indexes exist:
 
 RT-54 proved they can be silently absent: a fresh ``install-app`` marks every patch completed
 without running it, and a crash-window replay then duplicated the Sales Invoice AND (since RT-48)
-its stock movement. The poller asks this module before every tick; anything other than "both
-present" — including an unreadable schema — means **do not post** (sales stay pending in DP2,
-nothing is rejected, lost or duplicated). This module imports NO frappe; the glue supplies the
-``index_present(doctype, index_name)`` probe.
+its stock movement. The poller asks this module before every tick. Anything other than "both
+present as the exact UNIQUE constraint" — a missing index, a same-named non-unique or wrong-column
+index (Codex P1, PR #43), or an unreadable schema — means **do not post** (sales stay pending in
+DP2; nothing is rejected, lost or duplicated). This module imports NO frappe; the glue supplies the
+``index_present(doctype, index_name, columns)`` probe and the ``SHOW INDEX`` rows.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
-G5_INDEXES: tuple[tuple[str, str], ...] = (
-	("Sales Invoice", "unique_rt_si_provenance"),
-	("Posting Log", "unique_rt_posting_idem"),
+G5_INDEXES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+	("Sales Invoice", "unique_rt_si_provenance", ("rt_source_system", "rt_external_id")),
+	("Posting Log", "unique_rt_posting_idem", ("source_system", "external_id")),
 )
 
 
@@ -38,15 +39,23 @@ class GuardResult:
 	error: str | None = None
 
 
+def index_matches(rows: Sequence[Mapping[str, object]], columns: Sequence[str]) -> bool:
+	"""True only if ``SHOW INDEX`` rows for one key describe a UNIQUE index on exactly ``columns``, in order."""
+	if not rows or any(int(r.get("Non_unique") or 0) for r in rows):
+		return False
+	ordered = sorted(rows, key=lambda r: int(r["Seq_in_index"]))  # type: ignore[arg-type]
+	return tuple(str(r["Column_name"]) for r in ordered) == tuple(columns)
+
+
 def evaluate(
-	index_present: Callable[[str, str], object],
-	required: tuple[tuple[str, str], ...] = G5_INDEXES,
+	index_present: Callable[[str, str, tuple[str, ...]], object],
+	required: tuple[tuple[str, str, tuple[str, ...]], ...] = G5_INDEXES,
 ) -> GuardResult:
 	"""Decide whether posting may proceed. A probe failure is NOT ok (never assume the index exists)."""
 	missing: list[str] = []
-	for doctype, index in required:
+	for doctype, index, columns in required:
 		try:
-			present = bool(index_present(doctype, index))
+			present = bool(index_present(doctype, index, columns))
 		except Exception as exc:  # an unreadable schema must block posting, not wave it through
 			return GuardResult(ok=False, missing=tuple(missing), error=f"{type(exc).__name__}: {exc}"[:300])
 		if not present:

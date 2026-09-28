@@ -114,9 +114,37 @@ sets the site up **in ERPNext Desk**. Retail Tower does not load stock or change
    SELECT source_system, external_id, COUNT(*) FROM `tabPosting Log`
     GROUP BY 1, 2 HAVING COUNT(*) > 1;
    ```
-   Resolving a duplicate Sales Invoice is an **accounting and stock decision** (cancel the extra
-   invoice in ERPNext Desk, which reverses its stock and GL). Never delete rows directly. Then
-   re-run `migrate`. Posting stays paused until both indexes exist.
+   Resolve each duplicate as follows. Never delete rows; every step leaves an audit trail.
+
+   1. **Choose the surviving Sales Invoice.** This is the one the Posting Log row points to
+      (`document_name`) and that Data-Pulse-2 recorded as `documentRef`. The others are extras.
+      Deciding this is an **accounting and stock decision**.
+   2. **Cancel each extra Sales Invoice in ERPNext Desk.** This reverses its stock and GL.
+      Cancelling alone is **not enough**: a cancelled invoice keeps its provenance key, and the
+      unique index covers cancelled rows too.
+   3. **Re-tag the cancelled extra's provenance key** so it no longer conflicts, and leave an
+      audit comment. In `bench --site <site> console`:
+      ```python
+      name = "<extra SI name>"
+      ext = frappe.db.get_value("Sales Invoice", name, "rt_external_id")
+      assert frappe.db.get_value("Sales Invoice", name, "docstatus") == 2  # cancelled first
+      frappe.db.set_value("Sales Invoice", name, "rt_external_id", f"{ext}:dup-cancelled-{name}", update_modified=False)
+      frappe.get_doc("Sales Invoice", name).add_comment("Comment", f"Gate G5 dedupe: provenance re-tagged from {ext} (duplicate of the surviving invoice).")
+      frappe.db.commit()
+      ```
+   4. **Posting Log duplicates.** Keep the row whose `document_name` is the surviving invoice.
+      Re-tag the others the same way, never delete them:
+      ```python
+      frappe.db.set_value("Posting Log", "<row name>", "external_id", f"{ext}:dup-{'<row name>'}", update_modified=False)
+      frappe.db.commit()
+      ```
+   5. **Re-run `bench --site <site> migrate`,** confirm both `SHOW INDEX` checks return 2 rows,
+      and record the dedupe on the pilot issue. Posting resumes automatically on the next poller
+      tick.
+
+   If migrate reports `exists but is not UNIQUE on …`, an index with the right name has the
+   wrong definition (for example after a manual repair). Drop it
+   (`ALTER TABLE <table> DROP INDEX <name>`) and re-run `migrate`.
 
 Returns: a full void restores stock only if the original invoice moved it. Invoices posted
 before this change (`update_stock=0`) get an accounting-only credit note. Refunds never move

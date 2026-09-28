@@ -21,17 +21,29 @@ from __future__ import annotations
 
 import frappe
 
+from .posting.index_guard import index_matches
+
 POSTING_LOG_INDEX = "unique_rt_posting_idem"
 SALES_INVOICE_INDEX = "unique_rt_si_provenance"
+POSTING_LOG_COLUMNS = ("source_system", "external_id")
+SALES_INVOICE_COLUMNS = ("rt_source_system", "rt_external_id")
 
 
 class G5IndexError(RuntimeError):
 	"""A Gate G5 unique index could not be created (fail-closed; posting stays paused)."""
 
 
-def index_present(doctype: str, index_name: str) -> bool:
-	"""True if ``tab<doctype>`` carries an index named ``index_name`` (the guard's probe)."""
-	return bool(frappe.db.sql(f"SHOW INDEX FROM `tab{doctype}` WHERE Key_name = %s", (index_name,)))
+def _index_rows(doctype: str, index_name: str) -> list:
+	return frappe.db.sql(f"SHOW INDEX FROM `tab{doctype}` WHERE Key_name = %s", (index_name,), as_dict=True)
+
+
+def index_present(doctype: str, index_name: str, columns: tuple[str, ...]) -> bool:
+	"""True only if ``index_name`` is the exact UNIQUE index on ``columns`` (the guard's probe).
+
+	A same-named non-unique or wrong-column index does NOT count (Codex P1, PR #43): it would
+	pass a name-only check while providing no exactly-once constraint.
+	"""
+	return index_matches(_index_rows(doctype, index_name), columns)
 
 
 def ensure_posting_log_index() -> None:
@@ -39,8 +51,9 @@ def ensure_posting_log_index() -> None:
 	_ensure(
 		"Posting Log",
 		POSTING_LOG_INDEX,
+		POSTING_LOG_COLUMNS,
 		lambda: frappe.db.add_unique(
-			"Posting Log", ["source_system", "external_id"], constraint_name=POSTING_LOG_INDEX
+			"Posting Log", list(POSTING_LOG_COLUMNS), constraint_name=POSTING_LOG_INDEX
 		),
 	)
 
@@ -54,7 +67,7 @@ def ensure_sales_invoice_index() -> None:
 	the RT-58 bench), so the index goes through ``frappe.db.add_unique``, which commits first, the
 	same path as Posting Log.
 	"""
-	_ensure("Sales Invoice", SALES_INVOICE_INDEX, _create_sales_invoice_index)
+	_ensure("Sales Invoice", SALES_INVOICE_INDEX, SALES_INVOICE_COLUMNS, _create_sales_invoice_index)
 
 
 def _create_sales_invoice_index() -> None:
@@ -65,7 +78,7 @@ def _create_sales_invoice_index() -> None:
 	create_custom_fields(patch._INDEXED_FIELDS, ignore_validate=True)
 	frappe.db.commit()
 	frappe.db.add_unique(
-		"Sales Invoice", ["rt_source_system", "rt_external_id"], constraint_name=SALES_INVOICE_INDEX
+		"Sales Invoice", list(SALES_INVOICE_COLUMNS), constraint_name=SALES_INVOICE_INDEX
 	)
 
 
@@ -83,9 +96,16 @@ def after_migrate() -> None:
 	ensure_g5_indexes()
 
 
-def _ensure(doctype: str, index_name: str, create) -> None:
-	if index_present(doctype, index_name):
+def _ensure(doctype: str, index_name: str, columns: tuple[str, ...], create) -> None:
+	if index_present(doctype, index_name, columns):
 		return
+	if _index_rows(doctype, index_name):
+		# A same-named index with the WRONG definition: add_unique would see the name and skip, so
+		# never "repair" silently — fail loud and leave the fix to an operator (posting stays paused).
+		raise G5IndexError(
+			f"Gate G5: {index_name} on {doctype} exists but is not UNIQUE on {columns}. "
+			"Drop it and re-run migrate; posting stays paused until the exact index exists."
+		)
 	try:
 		create()
 	except Exception as exc:
@@ -94,5 +114,5 @@ def _ensure(doctype: str, index_name: str, create) -> None:
 			"Duplicate provenance rows may exist; see docs/runbooks/staging-install.md. "
 			"Posting stays paused until this index exists."
 		) from exc
-	if not index_present(doctype, index_name):
+	if not index_present(doctype, index_name, columns):
 		raise G5IndexError(f"Gate G5: {index_name} on {doctype} still absent after creation")
