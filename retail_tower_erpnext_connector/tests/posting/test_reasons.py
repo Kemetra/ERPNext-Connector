@@ -82,3 +82,37 @@ class TestFailureMessageHygiene:
         # F-008: sk_ (underscore) variant, not only sk-.
         clean = r.scrub_message("key leaked: sk_live_deadbeef1234")
         assert "sk_live_deadbeef1234" not in clean
+
+
+class TestReasonMessageBounds:
+    """RT-48: the DP2 ack contract bounds ``reason.message`` to 1..1000 chars (outcome-ack.dto.ts).
+
+    ERPNext validation messages can be long HTML (the missing-valuation-rate error embeds a form
+    link, <br>s and a <ul> of remedies). DP2 refuses an over-long message with a 400, which the
+    transport surfaces as an unexpected-status error that escapes the page — the same item would be
+    re-offered every tick. The reason must therefore be plain text and bounded.
+    """
+
+    def test_html_is_stripped_to_plain_text(self):
+        msg = (
+            'Valuation Rate for the Item <a href="/app/item/X">X</a>, is required.'
+            "<br><br>Here are the options:<ul><li>Fix A</li><li>Fix B</li></ul>"
+        )
+        reason = r.to_rejection_reason(r.FailureKind.VALIDATION, message=msg)
+        assert "<" not in reason.message
+        assert ">" not in reason.message
+        assert "Valuation Rate for the Item X, is required." in reason.message
+        assert "Fix A" in reason.message
+        assert "Fix B" in reason.message
+
+    def test_message_is_bounded_to_the_ack_contract_limit(self):
+        reason = r.to_rejection_reason(r.FailureKind.VALIDATION, message="x" * 5000)
+        assert 1 <= len(reason.message) <= 1000
+
+    def test_empty_message_still_satisfies_min_length(self):
+        reason = r.to_rejection_reason(r.FailureKind.VALIDATION, message="<br>")
+        assert len(reason.message) >= 1
+
+    def test_secrets_are_still_redacted_after_normalisation(self):
+        reason = r.to_rejection_reason(r.FailureKind.OTHER, message="<p>token=abc123secret</p>")
+        assert "abc123secret" not in reason.message

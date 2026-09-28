@@ -33,6 +33,13 @@ from .contracts import ErpnextDocumentRef, OutcomeAckRequest, PostingWorkItem
 from .idempotency import IdempotencyConflict, IdempotencyStore, key_for, provenance_id
 from .reasons import FailureKind, scrub_message, to_rejection_reason
 from .reversal_builder import build_reversing_invoice
+from .stock_policy import (
+    ReturnLineMismatch,
+    UnsupportedTrackedItem,
+    assert_no_tracked_items,
+    link_void_to_original,
+    tracking_item_codes,
+)
 from .transport import PostingFeedClient
 from .uom import (
     MoneyConformanceError,
@@ -182,6 +189,12 @@ def post_work_item(
         return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
     except Exception as exc:  # any other build error is non-retryable — never let it escape.
         return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
+
+    # RT-48 / RT-47 D4 — the sale moves stock, so a batch/serial Item fails closed (ERPNext would
+    # otherwise auto-pick a batch, i.e. guess one). After the replay guard, before insert.
+    rejected = _guard_tracked_items(doc_payload, work_item, client, correlation_id)
+    if rejected is not None:
+        return rejected
 
     # T031 — submit on ERPNext (interim SI-only; rider R1 — no Payment Entry here).
     try:
@@ -344,6 +357,27 @@ def _post_reversal(
         )
     doc_payload["return_against"] = original_name
 
+    # RT-48 / RT-47 D5 — a full void mirrors the original's update_stock (a legacy update_stock=0
+    # sale never fabricates a stock restoration) and links each line to its original row so
+    # ERPNext's per-line over-return cap applies. A refund stays update_stock=0 and unlinked (its
+    # line semantics belong to RT-14/RT-16). Any line mismatch fails closed.
+    if work_item.reversal_of is not None and work_item.reversal_of.reversal_kind == "void":
+        try:
+            original_update_stock, original_rows = _read_original_invoice(original_name)
+            doc_payload = link_void_to_original(
+                doc_payload,
+                original_update_stock=original_update_stock,
+                original_items=original_rows,
+            )
+        except ReturnLineMismatch as exc:
+            return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
+        except Exception as exc:  # a read failure must not escape the terminal-outcome invariant.
+            return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
+
+    rejected = _guard_tracked_items(doc_payload, work_item, client, correlation_id)
+    if rejected is not None:
+        return rejected
+
     # Submit on ERPNext. The `unique_rt_si_provenance` index spans ALL Sales Invoices (incl.
     # is_return=1), so a second submit of the SAME reversal key (its work_item_ref) collides and is
     # recovered exactly like the forward path — and because the builder wrote the reversal's
@@ -397,6 +431,57 @@ def _post_reversal(
     )
     _log_signal("posting.posted", work_item, correlation_id, document_ref=document_ref.name)
     return "posted"
+
+
+def _read_item_tracking(doc_payload: dict) -> dict[str, dict]:
+    """Read ``{item_code: {has_batch_no, has_serial_no}}`` for a stock-moving doc's Items (RT-48).
+
+    ⏳ BENCH-VALIDATION. Returns ``{}`` for a doc that does not move stock (nothing to check).
+    """
+    codes = tracking_item_codes(doc_payload)
+    if not codes or not doc_payload.get("update_stock"):
+        return {}
+    rows = frappe.get_all(
+        "Item",
+        filters={"name": ["in", codes]},
+        fields=["name", "has_batch_no", "has_serial_no"],
+    )
+    return {row["name"]: row for row in rows}
+
+
+def _guard_tracked_items(
+    doc_payload: dict,
+    work_item: PostingWorkItem,
+    client: PostingFeedClient,
+    correlation_id: str,
+) -> str | None:
+    """Reject a stock-moving doc carrying a batch/serial Item (RT-47 D4). Returns the outcome if rejected.
+
+    ⏳ BENCH-VALIDATION. The decision is the pure ``stock_policy.assert_no_tracked_items``; this
+    only reads the Item flags. A read failure is non-retryable ``other`` (never escapes the page).
+    """
+    try:
+        assert_no_tracked_items(doc_payload, _read_item_tracking(doc_payload))
+    except UnsupportedTrackedItem as exc:
+        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
+    except Exception as exc:
+        return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
+    return None
+
+
+def _read_original_invoice(name: str) -> tuple[int, list[dict]]:
+    """Read the original SI's ``update_stock`` and its item rows ``(name, item_code, qty, idx)`` (RT-48).
+
+    ⏳ BENCH-VALIDATION. Feeds the pure ``stock_policy.link_void_to_original``.
+    """
+    update_stock = frappe.db.get_value("Sales Invoice", name, "update_stock")
+    rows = frappe.get_all(
+        "Sales Invoice Item",
+        filters={"parent": name, "parenttype": "Sales Invoice"},
+        fields=["name", "item_code", "qty", "idx"],
+        order_by="idx asc",
+    )
+    return int(update_stock or 0), [dict(row) for row in rows]
 
 
 def _reject(

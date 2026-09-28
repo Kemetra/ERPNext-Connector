@@ -97,6 +97,14 @@ def build_reversing_invoice(
 	# A credit note IS a Sales Invoice with is_return=1.
 	doc["is_return"] = 1
 
+	# RT-48 / RT-47 D5: only a FULL VOID restores stock. A refund is amount-only today while this
+	# builder negates EVERY sale line, so a refund with update_stock=1 would restock the full sold
+	# quantity — refund stock semantics wait for RT-14/RT-16 (update_stock=0). A void keeps the
+	# forward builder's update_stock=1; the glue then MIRRORS the original invoice's update_stock
+	# (stock_policy.link_void_to_original) so a legacy update_stock=0 sale never fabricates stock.
+	reversal_kind = work_item.reversal_of.reversal_kind if work_item.reversal_of else None
+	doc["update_stock"] = 1 if reversal_kind == "void" else 0
+
 	# Return semantics: negate qty + amount (the credit note totals are negative); rate stays
 	# positive (ERPNext convention — the sign lives on qty). Negation is string-only (no float).
 	for item in doc["items"]:

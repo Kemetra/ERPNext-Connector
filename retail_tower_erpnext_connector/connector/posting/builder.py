@@ -11,7 +11,11 @@ document payload the connector will submit. It:
     a UOM resolver (FR-008) and a warehouse resolver (FR-010, applying the DP2-pre-resolved id);
   - keeps every monetary value an **exact-decimal string** (never float — FR-009);
   - carries ``businessDate`` → ``posting_date`` (never the connector's post-time — T033);
-  - addresses everything generically (``item_code`` / ``Warehouse`` name — FR-002, Principle II).
+  - addresses everything generically (``item_code`` / ``Warehouse`` name — FR-002, Principle II);
+  - posts with ``update_stock=1`` (RT-48, owner decision RT-47 D1): the Sales Invoice IS the
+    stock-moving document. ERPNext writes the Stock Ledger Entries inside the SAME submit, so the
+    existing SI idempotency (Posting Log + ``unique_rt_si_provenance``) is also the stock
+    exactly-once guarantee. No Delivery Note.
 
 This module imports NO frappe — it builds a plain dict the bench glue submits. The interim
 mode posts a submitted Sales Invoice only (outstanding AR; rider R1) — no Payment Entry here.
@@ -88,6 +92,8 @@ def build_sales_invoice(
         "rt_source_system": sale.source_system,
         "rt_external_id": sale.external_id,
         "rt_sale_ref": sale.sale_ref,
+        # RT-48 / RT-47 D1: the sale moves stock out of each line's mapped store warehouse.
+        "update_stock": 1,
         "items": items,
     }
 

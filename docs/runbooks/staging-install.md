@@ -53,6 +53,43 @@ bench --site <staging-site> run-tests --app retail_tower_erpnext_connector
 These assert install + metadata, no business mutation, no ERPNext fork, and the Connector
 Settings singleton (`tests/test_foundation.py`).
 
+## Stock-posting prerequisites (RT-48)
+
+POS sales post as Sales Invoices with `update_stock=1`: each submitted sale moves stock out of
+the store's mapped warehouse, and a full void's return invoice moves it back. Owner decisions:
+RT-47 (comment 10287) and RT-48 (comment 10291). Before the first POS sale, an ERP operator
+sets the site up **in ERPNext Desk**. Retail Tower does not load stock or change these settings.
+
+1. **Negative stock is allowed site-wide.** Set Stock Settings → *Allow Negative Stock* =
+   `1` (`allow_negative_stock`). A POS sale must never be blocked because ERPNext on-hand is
+   temporarily wrong. A negative Bin is an **operational stock discrepancy**: resolve it with
+   the correct ERPNext stock operation (receipt, transfer, stock count). Never auto-correct it
+   and never fabricate a receipt or adjustment.
+   ```bash
+   bench --site <site> execute frappe.db.set_single_value --args "['Stock Settings', 'allow_negative_stock', 1]"
+   ```
+2. **Perpetual-inventory accounts are configured** on the Company: default inventory, stock
+   adjustment and cost-of-goods-sold accounts. A stock-moving sale also posts cost-of-goods GL
+   entries.
+3. **Every sellable mapped Item has a valuation source.** Use any of: an opening Stock
+   Reconciliation with a valuation rate, Item `valuation_rate` or `standard_rate`, or a buying
+   Item Price. Without one, ERPNext refuses the first stock-moving sale of that Item ("Valuation
+   Rate for the Item … is required") even with negative stock allowed. The connector rejects that
+   sale as `permanently_rejected / validation`. Once the Item master is fixed, recover it with the
+   Backend-Core posting repair (`re_post`). The connector never posts a zero valuation.
+4. **Opening stock** comes from an ERPNext **Stock Reconciliation** (purpose *Opening Stock*)
+   per store warehouse, with quantity and valuation rate, dated **before** the first POS sale.
+   It is strongly recommended for a correct baseline, but a missing balance does not block sales
+   (see 1).
+5. **Pilot Items are non-batch and non-serial** (`has_batch_no = 0`, `has_serial_no = 0`). The
+   connector rejects a stock-moving invoice that contains a batch- or serial-tracked Item
+   (`validation`), so one tracked line rejects the whole basket. Batch/expiry is a separate
+   pharmacy capability (RT-50). This technical pilot is **not** pharmacy readiness.
+
+Returns: a full void restores stock only if the original invoice moved it. Invoices posted
+before this change (`update_stock=0`) get an accounting-only credit note. Refunds never move
+stock until line-aware refunds land (RT-14/RT-16).
+
 ## Uninstall (safety check)
 
 ```bash

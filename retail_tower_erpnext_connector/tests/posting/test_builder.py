@@ -244,3 +244,26 @@ class TestBuilderFailClosed:
         # Only uom_for + warehouse_for are injected — NO item-resolver parameter exists.
         assert "resolve" not in str(sig).lower()
         assert "item_for" not in sig.parameters
+
+
+class TestStockEffect:
+    """RT-48 (owner decision RT-47 D1): the POS sale Sales Invoice IS the stock-moving document.
+
+    ``update_stock=1`` makes ERPNext write the Stock Ledger Entries inside the SAME submit as the
+    invoice, so the existing SI idempotency (Posting Log + ``unique_rt_si_provenance``) is also the
+    stock exactly-once guarantee. No Delivery Note (D1).
+    """
+
+    def test_sale_invoice_moves_stock(self):
+        doc = b.build_sales_invoice(
+            _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+        )
+        assert doc["update_stock"] == 1
+
+    def test_every_line_carries_the_mapped_store_warehouse(self):
+        # update_stock posts each Stock Ledger Entry against the line's warehouse — it must be the
+        # DP2-pre-resolved store warehouse (never a guessed/default one).
+        doc = b.build_sales_invoice(
+            _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+        )
+        assert all(item["warehouse"] == "Main - RT" for item in doc["items"])
