@@ -41,10 +41,16 @@ class GuardResult:
 
 def index_matches(rows: Sequence[Mapping[str, object]], columns: Sequence[str]) -> bool:
 	"""True only if ``SHOW INDEX`` rows for one key describe a UNIQUE index on exactly ``columns``, in order."""
-	if not rows or any(int(r.get("Non_unique") or 0) for r in rows):
+	if not rows:
+		return False
+	if not _all_unique(rows):
 		return False
 	ordered = sorted(rows, key=lambda r: int(r["Seq_in_index"]))  # type: ignore[arg-type]
 	return tuple(str(r["Column_name"]) for r in ordered) == tuple(columns)
+
+
+def _all_unique(rows: Sequence[Mapping[str, object]]) -> bool:
+	return all(int(r.get("Non_unique") or 0) == 0 for r in rows)
 
 
 def evaluate(
