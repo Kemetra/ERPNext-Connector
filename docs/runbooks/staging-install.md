@@ -88,15 +88,35 @@ sets the site up **in ERPNext Desk**. Retail Tower does not load stock or change
 
 6. **Confirm the exactly-once indexes exist (Gate G5) before go-live and after every upgrade.**
    Stock now moves inside the Sales Invoice submit, so a missing index duplicates **stock as well
-   as revenue** when a crash-window re-offer happens. In the RT-48 lab both indexes were absent
-   even though their patches were logged as applied; the root cause is tracked separately.
+   as revenue** when a crash-window re-offer happens.
+
+   Why they could be missing (RT-54): Frappe's `install-app` marks every `patches.txt` entry
+   completed **without running it**, and the indexes used to be created only by patches. Since
+   RT-58 the connector ensures both indexes itself, idempotently and failing loudly:
+   - the `after_install` and `after_migrate` hooks (`connector.schema`);
+   - the Posting Log `on_doctype_update`.
+
+   The posting poller also refuses to post while either index is missing. It logs
+   `posting.guard.missing_index`, sales stay pending in Data-Pulse-2, and nothing is lost or
+   duplicated. Still verify:
    ```sql
    SHOW INDEX FROM `tabSales Invoice` WHERE Key_name = 'unique_rt_si_provenance';  -- expect 2 rows
    SHOW INDEX FROM `tabPosting Log`   WHERE Key_name = 'unique_rt_posting_idem';   -- expect 2 rows
    ```
-   If either query returns no rows, **do not post**. Re-apply the patch modules
-   (`retail_tower_erpnext_connector.patches.sales_invoice_unique_provenance` /
-   `posting_log_unique_idem`, whose `execute()` is idempotent) and re-check.
+   If either returns no rows, run `bench --site <site> migrate`. `after_migrate` re-creates the
+   indexes.
+
+   If migrate then fails with `Gate G5: could not create …`, duplicate provenance rows already
+   exist. Find them:
+   ```sql
+   SELECT rt_source_system, rt_external_id, COUNT(*) FROM `tabSales Invoice`
+    WHERE rt_external_id IS NOT NULL GROUP BY 1, 2 HAVING COUNT(*) > 1;
+   SELECT source_system, external_id, COUNT(*) FROM `tabPosting Log`
+    GROUP BY 1, 2 HAVING COUNT(*) > 1;
+   ```
+   Resolving a duplicate Sales Invoice is an **accounting and stock decision** (cancel the extra
+   invoice in ERPNext Desk, which reverses its stock and GL). Never delete rows directly. Then
+   re-run `migrate`. Posting stays paused until both indexes exist.
 
 Returns: a full void restores stock only if the original invoice moved it. Invoices posted
 before this change (`update_stock=0`) get an accounting-only credit note. Refunds never move

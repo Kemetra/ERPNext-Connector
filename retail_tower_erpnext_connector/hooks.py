@@ -44,6 +44,13 @@ fixtures = [
 	}
 ]
 
+# RT-58 — Gate G5 exactly-once indexes must exist on EVERY site. Frappe's install_app marks all
+# patches completed WITHOUT running them (RT-54 root cause), so the patch-only indexes were absent
+# on fresh installs. These idempotent hooks ensure both indexes on install and on every migrate
+# (fail-loud if one cannot be created); the patches remain for the upgrade path.
+after_install = "retail_tower_erpnext_connector.connector.schema.after_install"
+after_migrate = "retail_tower_erpnext_connector.connector.schema.after_migrate"
+
 # The posting poller — pulls posting work-items from Data-Pulse-2, posts each to ERPNext,
 # and acks the outcome (T093). The job entrypoint lives in the posting module. It runs every
 # minute (Frappe's finest cron granularity) for the RT-45 target of a sale reaching ERPNext in
