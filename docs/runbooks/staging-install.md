@@ -151,6 +151,30 @@ sets the site up **in ERPNext Desk**. Retail Tower does not load stock or change
    wrong definition (for example after a manual repair). Drop it
    (`ALTER TABLE <table> DROP INDEX <name>`) and re-run `migrate`.
 
+7. **The store's timezone equals the ERPNext site timezone (RT-49).** Invoices post on the sale's
+   `businessDate` with `set_posting_time = 1`. Backend-Core derives `businessDate` in the
+   **store** timezone, while ERPNext reads `posting_time` in the **site** timezone
+   (System Settings → *Time Zone*). Both must be the same zone, for example `Africa/Cairo`.
+   Owner decision: RT-49 comment 10312.
+   - Check the site timezone:
+     ```bash
+     bench --site <site> execute frappe.utils.get_system_timezone
+     ```
+     Compare it with the store's timezone in Backend-Core. A store that has never been set up
+     defaults to `UTC`.
+   - How the connector sets the posting time:
+     - **Sale:** the POS `occurredAt` time, converted to the site timezone and never later than
+       now.
+     - **Void:** the same date and time as its sale, raised to the original invoice's timestamp
+       if that is later. A void therefore posts in its sale's fiscal day. A late void is
+       back-dated, which makes ERPNext run a Repost Item Valuation, and it is rejected if that
+       period is closed.
+   - When the zones disagree near midnight, or the POS clock runs ahead, the connector still keeps
+     the posting date but clamps the time. It logs `posting.time_adjusted` at ERROR in
+     `retail_tower_posting.log`. A `clamped_*` or `capped_at_now` entry means this prerequisite
+     is broken; fix the timezone.
+     `raised_to_original` is expected only for invoices posted before RT-49.
+
 Returns: a full void restores stock only if the original invoice moved it. Invoices posted
 before this change (`update_stock=0`) get an accounting-only credit note. Refunds never move
 stock until line-aware refunds land (RT-14/RT-16).
