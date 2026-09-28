@@ -198,9 +198,7 @@ def post_work_item(
 
     # T031 — submit on ERPNext (interim SI-only; rider R1 — no Payment Entry here).
     try:
-        sinv = frappe.get_doc(doc_payload)
-        sinv.insert()
-        sinv.submit()
+        sinv = _submit_atomically(doc_payload)
         document_ref = ErpnextDocumentRef(doctype="Sales Invoice", name=sinv.name)
     except _transient_exceptions() as exc:
         # T051 — transient (timeout/lock) → failed_transient; DP2 re-offers (no self-retry).
@@ -383,9 +381,7 @@ def _post_reversal(
     # recovered exactly like the forward path — and because the builder wrote the reversal's
     # work_item_ref into rt_external_id (#28 re-key), it does NOT collide with the original SI's slot.
     try:
-        sinv = frappe.get_doc(doc_payload)
-        sinv.insert()
-        sinv.submit()
+        sinv = _submit_atomically(doc_payload)
         document_ref = ErpnextDocumentRef(doctype="Sales Invoice", name=sinv.name)
     except _transient_exceptions() as exc:
         client.ack_outcome(
@@ -431,6 +427,30 @@ def _post_reversal(
     )
     _log_signal("posting.posted", work_item, correlation_id, document_ref=document_ref.name)
     return "posted"
+
+
+_SUBMIT_SAVEPOINT = "rt_posting_submit"
+
+
+def _submit_atomically(doc_payload: dict):
+    """Insert + submit one Sales Invoice as a unit: on ANY failure, undo it before re-raising (RT-48).
+
+    ⏳ BENCH-VALIDATION. A submit can fail PART-WAY. The RT-48 bench run proved it: a missing
+    valuation rate raised after the invoice row and its Stock Ledger Entry were written, and the
+    scheduler job then committed that half-posted invoice while the connector acked
+    ``permanently_rejected``. Stock and ERP truth would diverge from the DP2 outcome (Principle VI).
+    Rolling back to a savepoint keeps "rejected" meaning "nothing posted", so the later ``re_post``
+    repair starts clean. The caller's exception mapping is unchanged.
+    """
+    frappe.db.savepoint(_SUBMIT_SAVEPOINT)
+    try:
+        sinv = frappe.get_doc(doc_payload)
+        sinv.insert()
+        sinv.submit()
+    except BaseException:
+        frappe.db.rollback(save_point=_SUBMIT_SAVEPOINT)
+        raise
+    return sinv
 
 
 def _read_item_tracking(doc_payload: dict) -> dict[str, dict]:
