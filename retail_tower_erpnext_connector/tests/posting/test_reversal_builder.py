@@ -414,3 +414,34 @@ class TestStockEffectByReversalKind:
 		doc = _build(_void_work_item())
 		assert doc["update_stock"] == 1
 		assert doc["is_return"] == 1
+
+
+class TestPostingTime:
+	"""RT-49 (decision 10312): a reversal keeps its businessDate via set_posting_time=1."""
+
+	def test_sets_set_posting_time_and_business_date(self):
+		doc = rb.build_reversing_invoice(
+			_reversal_work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+		)
+		assert doc["set_posting_time"] == 1
+		assert doc["posting_date"] == "2026-06-05"
+
+	def test_default_stamp_clamps_a_sale_time_from_an_earlier_day(self):
+		# The fixture's reversal businessDate (06-05) is after the sale's occurredAt day (06-01), so
+		# the sale-derived time is clamped to the start of the reversal's business day.
+		doc = rb.build_reversing_invoice(
+			_reversal_work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+		)
+		assert doc["posting_time"] == "00:00:00.000000"
+
+	def test_applies_the_injected_stamp(self):
+		from retail_tower_erpnext_connector.connector.posting import posting_time as pt
+
+		doc = rb.build_reversing_invoice(
+			_reversal_work_item(),
+			uom_for=_uom,
+			warehouse_for=_warehouse,
+			customer_for=_customer,
+			posting_stamp=pt.PostingStamp("2026-06-05", "09:30:00.000000"),
+		)
+		assert (doc["posting_date"], doc["posting_time"]) == ("2026-06-05", "09:30:00.000000")

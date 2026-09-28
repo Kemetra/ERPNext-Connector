@@ -26,11 +26,14 @@ idempotency-store DocType is the deferred [GATED] T020). It RECEIVES an
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import frappe
 
 from .builder import UnmappedUnit, build_sales_invoice
 from .contracts import ErpnextDocumentRef, OutcomeAckRequest, PostingWorkItem
 from .idempotency import IdempotencyConflict, IdempotencyStore, key_for, provenance_id
+from .posting_time import PostingClock, PostingStamp, apply_stamp, raise_to_original, stamp_for
 from .reasons import FailureKind, scrub_message, to_rejection_reason
 from .reversal_builder import build_reversing_invoice
 from .stock_policy import (
@@ -175,11 +178,13 @@ def post_work_item(
     # `except Exception` guarantees no build error escapes the terminal-outcome invariant
     # (Codex-P2 / SC-001 / Principle VI).
     try:
+        stamp = _posting_stamp(work_item, work_item.sale.business_date)
         doc_payload = build_sales_invoice(
             work_item,
             uom_for=uom_map.resolve,
             warehouse_for=warehouses.for_store,
             customer_for=customers.for_store,
+            posting_stamp=stamp,
         )
     except UnmappedUnit as exc:
         return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, str(exc))
@@ -189,6 +194,8 @@ def post_work_item(
         return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
     except Exception as exc:  # any other build error is non-retryable — never let it escape.
         return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
+
+    _log_stamp_adjustments(stamp, work_item, correlation_id)
 
     # RT-48 / RT-47 D4 — the sale moves stock, so a batch/serial Item fails closed (ERPNext would
     # otherwise auto-pick a batch, i.e. guess one). After the replay guard, before insert.
@@ -327,11 +334,13 @@ def _post_reversal(
     # mapping as the forward path: unmapped unit → unmapped_unit; money/warehouse/store → validation;
     # anything else → other. A final `except Exception` guarantees the terminal-outcome invariant.
     try:
+        stamp = _posting_stamp(work_item, work_item.business_date)
         doc_payload = build_reversing_invoice(
             work_item,
             uom_for=uom_map.resolve,
             warehouse_for=warehouses.for_store,
             customer_for=customers.for_store,
+            posting_stamp=stamp,
         )
     except UnmappedUnit as exc:
         return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, str(exc))
@@ -354,6 +363,17 @@ def _post_reversal(
             "reversal targets a sale with no submitted Sales Invoice (return_against unresolved)",
         )
     doc_payload["return_against"] = original_name
+
+    # RT-49 (decision 10312) — ERPNext rejects a return timestamped EARLIER than its original. An
+    # original posted before RT-49 carries ERPNext's post-day, which can be after the businessDate
+    # stamp; raise to it (equal is allowed). Applies to every reversal kind.
+    try:
+        original_date, original_time = _read_original_posting(original_name)
+        stamp = raise_to_original(stamp, original_date, original_time)
+        doc_payload = apply_stamp(doc_payload, stamp)
+    except Exception as exc:  # a read failure must not escape the terminal-outcome invariant.
+        return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
+    _log_stamp_adjustments(stamp, work_item, correlation_id)
 
     # RT-48 / RT-47 D5 — a full void mirrors the original's update_stock (a legacy update_stock=0
     # sale never fabricates a stock restoration) and links each line to its original row so
@@ -487,6 +507,53 @@ def _guard_tracked_items(
     except Exception as exc:
         return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
     return None
+
+
+def _posting_clock() -> PostingClock:
+    """The ERPNext site timezone (ERPNext reads ``posting_time`` as site-local) and now (RT-49).
+
+    ⏳ BENCH-VALIDATION.
+    """
+    return PostingClock(site_tz=frappe.utils.get_system_timezone(), now=datetime.now(timezone.utc))
+
+
+def _posting_stamp(work_item: PostingWorkItem, business_date: str) -> PostingStamp:
+    """RT-49 rule (``posting_time.stamp_for``) for this work-item on the live site clock."""
+    return stamp_for(work_item.sale.occurred_at, business_date, _posting_clock())
+
+
+def _read_original_posting(name: str) -> tuple[object, object]:
+    """Read the original SI's ``(posting_date, posting_time)`` as stored (RT-49).
+
+    ⏳ BENCH-VALIDATION. ``posting_time`` comes back from MariaDB as a ``timedelta``;
+    ``posting_time.raise_to_original`` normalises it.
+    """
+    row = frappe.db.get_value("Sales Invoice", name, ["posting_date", "posting_time"], as_dict=True)
+    if not row:
+        raise ValueError(f"original Sales Invoice {name!r} not readable for its posting time")
+    return row["posting_date"], row["posting_time"]
+
+
+def _log_stamp_adjustments(stamp: PostingStamp, work_item: PostingWorkItem, correlation_id: str) -> None:
+    """Log a clamped/capped/raised posting stamp at ERROR (Frappe drops lower levels; RT-49 10312).
+
+    A clamp means the store and site timezones disagree (a precondition breach) or the POS clock
+    ran ahead; a raise means the original invoice was posted before RT-49 on a later day.
+    """
+    if not stamp.adjustments:
+        return
+    frappe.logger("retail_tower_posting").error(
+        {
+            "event": "posting.time_adjusted",
+            "work_item_ref": work_item.work_item_ref,
+            "source_system": work_item.source_system,
+            "external_id": work_item.external_id,
+            "request_id": correlation_id,
+            "adjustments": list(stamp.adjustments),
+            "posting_date": stamp.posting_date,
+            "posting_time": stamp.posting_time,
+        }
+    )
 
 
 def _read_original_invoice(name: str) -> tuple[int, list[dict]]:

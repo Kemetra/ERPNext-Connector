@@ -267,3 +267,37 @@ class TestStockEffect:
             _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
         )
         assert all(item["warehouse"] == "Main - RT" for item in doc["items"])
+
+
+class TestPostingTime:
+    """RT-49 (decision 10312): ERPNext overwrites posting_date unless set_posting_time=1."""
+
+    def test_sets_set_posting_time_so_business_date_is_kept(self):
+        doc = b.build_sales_invoice(
+            _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+        )
+        assert doc["set_posting_time"] == 1
+        assert doc["posting_date"] == "2026-06-01"
+
+    def test_default_stamp_uses_occurred_at_in_utc(self):
+        doc = b.build_sales_invoice(
+            _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+        )
+        assert doc["posting_time"] == "10:00:00.000000"
+
+    def test_applies_the_injected_stamp(self):
+        from retail_tower_erpnext_connector.connector.posting import posting_time as pt
+
+        stamp = pt.PostingStamp("2026-06-01", "13:00:00.000000")
+        doc = b.build_sales_invoice(
+            _work_item(),
+            uom_for=_uom,
+            warehouse_for=_warehouse,
+            customer_for=_customer,
+            posting_stamp=stamp,
+        )
+        assert (doc["set_posting_time"], doc["posting_date"], doc["posting_time"]) == (
+            1,
+            "2026-06-01",
+            "13:00:00.000000",
+        )

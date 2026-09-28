@@ -18,8 +18,10 @@ path and no duplicated line loop. This builder then:
   - writes the provenance fields from the #28 discriminator: ``rt_external_id`` =
     ``idempotency.provenance_id(work_item)`` (= ``work_item.work_item_ref`` for a reversal),
     ``rt_source_system`` = ``work_item.source_system`` (THE F-002 RULE — see below);
-  - overwrites ``posting_date`` with the reversal work-item's OWN ``business_date`` (the credit
-    note posts in ITS fiscal period, not the original sale snapshot's).
+  - posts on the reversal work-item's ``business_date`` with ``set_posting_time = 1`` (RT-49).
+    Today DP2 sends the ORIGINAL sale's business date there (``posting-work-item.projection.ts``),
+    so a void posts in the sale's fiscal day; the glue then raises the stamp to the original
+    invoice's posting timestamp if that is later (``posting_time.raise_to_original``).
 
 THE CRITICAL CORRECTNESS CONSTRAINT (F-002 + Connector #28): the ``unique_rt_si_provenance`` index
 spans ALL Sales Invoices via ``rt_external_id``. DP2 emits the ORIGINAL sale's ``externalId`` as the
@@ -52,6 +54,7 @@ from collections.abc import Callable
 from .builder import build_sales_invoice
 from .contracts import PostingWorkItem
 from .idempotency import provenance_id
+from .posting_time import UTC_CLOCK, PostingStamp, apply_stamp, stamp_for
 
 
 def _negate(amount: str) -> str:
@@ -75,12 +78,15 @@ def build_reversing_invoice(
 	uom_for: Callable[[str], str],
 	warehouse_for: Callable[[str], dict],
 	customer_for: Callable[[str], str],
+	posting_stamp: PostingStamp | None = None,
 ) -> dict:
 	"""Build the ERPNext return Sales-Invoice (credit note) payload for one ``reversal`` work-item.
 
 	Resolvers mirror :func:`builder.build_sales_invoice` exactly (UOM / warehouse / customer). The
 	money path is the forward builder's (validated once on positive magnitudes); qty/amount are then
 	negated. Raises :class:`ValueError` if handed a non-reversal work-item (it would mis-post).
+	``posting_stamp`` is the RT-49 posting date/time (glue: site clock); without one it is derived
+	from ``sale.occurredAt`` and the reversal's ``business_date`` in UTC.
 	"""
 	if work_item.kind != "reversal":
 		raise ValueError(f"build_reversing_invoice expects a reversal work-item, got kind {work_item.kind!r}")
@@ -120,8 +126,7 @@ def build_reversing_invoice(
 	doc["rt_source_system"] = work_item.source_system
 	doc["rt_external_id"] = provenance_id(work_item)
 
-	# The credit note posts in the REVERSAL's fiscal period (its own businessDate), not the
-	# original sale snapshot's. The forward builder set sale.business_date — overwrite it.
-	doc["posting_date"] = work_item.business_date
-
-	return doc
+	# RT-49: the credit note posts on the reversal work-item's businessDate (set_posting_time=1).
+	# The forward builder stamped sale.business_date — replace it with the reversal's stamp.
+	stamp = posting_stamp or stamp_for(work_item.sale.occurred_at, work_item.business_date, UTC_CLOCK)
+	return apply_stamp(doc, stamp)
