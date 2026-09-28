@@ -86,6 +86,18 @@ sets the site up **in ERPNext Desk**. Retail Tower does not load stock or change
    (`validation`), so one tracked line rejects the whole basket. Batch/expiry is a separate
    pharmacy capability (RT-50). This technical pilot is **not** pharmacy readiness.
 
+6. **Confirm the exactly-once indexes exist (Gate G5) before go-live and after every upgrade.**
+   Stock now moves inside the Sales Invoice submit, so a missing index duplicates **stock as well
+   as revenue** when a crash-window re-offer happens. In the RT-48 lab both indexes were absent
+   even though their patches were logged as applied; the root cause is tracked separately.
+   ```sql
+   SHOW INDEX FROM `tabSales Invoice` WHERE Key_name = 'unique_rt_si_provenance';  -- expect 2 rows
+   SHOW INDEX FROM `tabPosting Log`   WHERE Key_name = 'unique_rt_posting_idem';   -- expect 2 rows
+   ```
+   If either query returns no rows, **do not post**. Re-apply the patch modules
+   (`retail_tower_erpnext_connector.patches.sales_invoice_unique_provenance` /
+   `posting_log_unique_idem`, whose `execute()` is idempotent) and re-check.
+
 Returns: a full void restores stock only if the original invoice moved it. Invoices posted
 before this change (`update_stock=0`) get an accounting-only credit note. Refunds never move
 stock until line-aware refunds land (RT-14/RT-16).
