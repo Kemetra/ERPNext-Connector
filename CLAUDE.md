@@ -508,18 +508,16 @@ of mappings — never edit it from here, never re-derive its model.
 
 ## Repo-specific read order
 
-**The former "Agent OS / Maestro" operating mode is retired** (superseded by the RT operating instructions at the top of this file). `docs/agent-os/maestro-playbook.md`, `execution-map.yaml`, `wave-status.md`, and `agent-profiles.yaml` are historical per-spec records only — they are not an active dispatch system, and "Execute slice X" is not a valid task form. The unit of work is a Jira issue (`Execute RT-XX`).
+**The former "Agent OS / Maestro" dispatch system is retired and removed** (superseded by the RT operating instructions at the top of this file). The Maestro playbook, `agent-profiles.yaml`, `slice-schema.yaml`, and the per-spec `execution-map.yaml`/`wave-status.md` templates have been deleted — see git history if the old dispatch mechanism needs to be referenced. `docs/agent-os/standing-rules.md` has been rewritten to speak in Jira-native terms and remains the current repo engineering gates. "Execute slice X" is not a valid task form; the unit of work is a Jira issue (`Execute RT-XX`).
 
 Bootstrap read order for every session:
 
 1. `git fetch origin && git pull --ff-only origin main` — always start from latest `origin/main`.
 2. [.specify/memory/constitution.md](.specify/memory/constitution.md) — 7 Core Principles; supreme source of truth for all design constraints.
-3. [docs/agent-os/standing-rules.md](docs/agent-os/standing-rules.md) — repo engineering gates only (constitution deference, branch hygiene, forbidden paths, no-local-bench validation, git discipline); subordinate to the RT operating instructions above for anything about work source, authority, or scope.
+3. [docs/agent-os/standing-rules.md](docs/agent-os/standing-rules.md) — repo engineering gates (constitution deference, branch hygiene, forbidden paths, no-local-bench validation, git discipline, stop conditions); subordinate to the RT operating instructions above for anything about work source, authority, or scope.
 4. GitHub PRs / reviews — current authoritative state for in-flight work.
 
 The Spec-Kit flow (specify → clarify → plan → tasks → analyze → implement) remains the spec-authoring process used within a Jira issue's scope; it does not replace Jira as the work-management authority. Do not duplicate standing-rules content here; `standing-rules.md` governs on engineering-gate questions.
-
-**Mapping standing-rules.md's forbidden-surface gate to Jira.** `standing-rules.md` §3 (forbidden surfaces) and §7 (stop conditions) still speak in terms of a retired "slice brief" providing `allowed_files`/`forbidden_files` and `[GATED]` approval. Since there is no slice brief under the RT operating model, map those clauses as follows: `allowed_files` = the scope stated in the Jira issue (RT operating instructions §8); `[GATED]` approval = explicit authorization written into the Jira issue or given by the owner (RT operating instructions §10); if the issue doesn't make the scope or gate status clear, that is the §14 stop condition "Jira scope is ambiguous" — stop and ask on the issue rather than proceeding or improvising a brief.
 
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
