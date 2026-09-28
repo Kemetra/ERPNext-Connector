@@ -36,6 +36,7 @@ from .idempotency import IdempotencyConflict, IdempotencyStore, key_for, provena
 from .posting_time import PostingClock, PostingStamp, apply_stamp, raise_to_original, stamp_for
 from .reasons import FailureKind, scrub_message, to_rejection_reason
 from .reversal_builder import build_reversing_invoice
+from .reversal_policy import UnsupportedReversal, assert_reversal_supported
 from .stock_policy import (
     ReturnLineMismatch,
     UnsupportedTrackedItem,
@@ -329,6 +330,14 @@ def _post_reversal(
         )
         _log_signal("posting.replay", work_item, correlation_id)
         return "posted"
+
+    # RT-71 (RT-14 F1 / D8) — an amount-only refund would credit the WHOLE sale (the feed carries
+    # every sale line and no refund amount). Reject it before building anything. AFTER the replay
+    # guard, so an already-posted legacy refund still echoes its document.
+    try:
+        assert_reversal_supported(work_item)
+    except UnsupportedReversal as exc:
+        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
 
     # Build the reversing payload from the pure core (no frappe in the build). Same fail-closed
     # mapping as the forward path: unmapped unit → unmapped_unit; money/warehouse/store → validation;
