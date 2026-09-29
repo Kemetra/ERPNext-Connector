@@ -87,3 +87,31 @@ def build_payments(
     if tender_total != line_total:
         raise TenderMismatch(tender_total, line_total)
     return [{"mode_of_payment": mode_of_payment_for(t.method), "amount": t.amount} for t in tenders]
+
+
+class SettlementDrift(Exception):
+    """ERPNext's computed totals do not settle the invoice exactly (amendment 4a) → validation.
+
+    Raised between insert and submit: ERPNext recomputes totals on insert (currency precision,
+    taxes, pricing rules), so the pre-build tender check alone cannot prove the posted invoice has
+    no change, outstanding balance or write-off.
+    """
+
+
+SETTLED_FIELDS = ("grand_total", "paid_amount", "change_amount", "write_off_amount", "outstanding_amount")
+
+
+def assert_settled(totals: Mapping[str, object]) -> None:
+    """Raise :class:`SettlementDrift` unless ``paid_amount == grand_total`` with no residual.
+
+    ``totals`` carries ERPNext's computed Sales Invoice values (floats from the document); each is
+    compared as a :class:`Decimal` built from its string form. A missing value counts as zero.
+    """
+    values = {f: Decimal(str(totals.get(f) or 0)) for f in SETTLED_FIELDS}
+    residual = {f: values[f] for f in ("change_amount", "write_off_amount", "outstanding_amount") if values[f]}
+    if values["paid_amount"] != values["grand_total"] or residual:
+        raise SettlementDrift(
+            f"invoice does not settle exactly after ERPNext computed its totals: grand_total "
+            f"{values['grand_total']}, paid_amount {values['paid_amount']}, residual {residual or 'none'} "
+            "— rolled back, rejected as validation (amendment 4a)"
+        )

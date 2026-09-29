@@ -44,6 +44,14 @@ from .stock_policy import (
     link_void_to_original,
     tracking_item_codes,
 )
+from .tender import (
+    SETTLED_FIELDS,
+    SettlementDrift,
+    TenderMismatch,
+    TenderModeMap,
+    UnmappedTender,
+    assert_settled,
+)
 from .transport import PostingFeedClient
 from .uom import (
     MoneyConformanceError,
@@ -131,11 +139,14 @@ def post_work_item(
     uom_map: UomMap,
     warehouses: PreResolvedWarehouse,
     customers: StoreCustomerMap,
+    tenders: TenderModeMap,
     correlation_id: str,
 ) -> str:
     """Post one work-item to ERPNext and ack the outcome. Returns the resulting outcome string.
 
     ⏳ BENCH-VALIDATION — exercises live ``frappe`` APIs; validated on staging, not locally.
+    ``tenders`` is the RT-10 D5 tender → Mode of Payment map (RT-78); a sale or void carrying
+    tenders is settled on the invoice, an unmapped method fails closed.
     """
     key = key_for(work_item)
 
@@ -161,6 +172,7 @@ def post_work_item(
             uom_map=uom_map,
             warehouses=warehouses,
             customers=customers,
+            tenders=tenders,
             correlation_id=correlation_id,
         )
     if work_item.kind != "sale_post":
@@ -186,12 +198,15 @@ def post_work_item(
             warehouse_for=warehouses.for_store,
             customer_for=customers.for_store,
             posting_stamp=stamp,
+            mode_of_payment_for=tenders.resolve,
         )
     except UnmappedUnit as exc:
         return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, str(exc))
-    except (MoneyConformanceError, UnresolvedWarehouse, UnmappedStore) as exc:
+    except (MoneyConformanceError, UnresolvedWarehouse, UnmappedStore, UnmappedTender, TenderMismatch) as exc:
         # UnmappedStore (F-009): a store with no configured Customer fails closed → validation,
         # exactly like an unresolved warehouse — never fabricate a customer (Principle VI).
+        # RT-78: an unmapped tender method (D5) or a tender total that differs from the lines
+        # (amendment 4a) is the same — the connector never guesses a mode or forces a match.
         return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
     except Exception as exc:  # any other build error is non-retryable — never let it escape.
         return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
@@ -217,6 +232,11 @@ def post_work_item(
         )
         _log_signal("posting.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
         return "failed_transient"
+    except SettlementDrift as exc:
+        # RT-78 — ERPNext's computed totals left change/outstanding/write-off on a settled invoice.
+        # _submit_atomically already rolled the insert back; nothing was submitted. Caught BEFORE the
+        # dup-provenance clause, whose fallback catches Exception on a frappe missing those names.
+        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
     except _dup_provenance_exceptions() as exc:
         # GATE G5 / F-002 — the crash-window recovery. The `unique_rt_si_provenance` index rejected
         # a SECOND submit of an already-posted sale (a crash between the FIRST submit and
@@ -303,6 +323,7 @@ def _post_reversal(
     uom_map: UomMap,
     warehouses: PreResolvedWarehouse,
     customers: StoreCustomerMap,
+    tenders: TenderModeMap,
     correlation_id: str,
 ) -> str:
     """Post one ``reversal`` work-item as a return Sales Invoice (credit note). Returns the outcome.
@@ -352,10 +373,11 @@ def _post_reversal(
             warehouse_for=warehouses.for_store,
             customer_for=customers.for_store,
             posting_stamp=stamp,
+            mode_of_payment_for=tenders.resolve,
         )
     except UnmappedUnit as exc:
         return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, str(exc))
-    except (MoneyConformanceError, UnresolvedWarehouse, UnmappedStore) as exc:
+    except (MoneyConformanceError, UnresolvedWarehouse, UnmappedStore, UnmappedTender, TenderMismatch) as exc:
         return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
     except Exception as exc:  # any other build error is non-retryable — never let it escape.
         return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
@@ -426,6 +448,11 @@ def _post_reversal(
         )
         _log_signal("posting.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
         return "failed_transient"
+    except SettlementDrift as exc:
+        # RT-78 — ERPNext's computed totals left change/outstanding/write-off on a settled invoice.
+        # _submit_atomically already rolled the insert back; nothing was submitted. Caught BEFORE the
+        # dup-provenance clause, whose fallback catches Exception on a frappe missing those names.
+        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
     except _dup_provenance_exceptions() as exc:
         # Crash-window recovery, keyed on the reversal's work_item_ref provenance (#28 re-key): a
         # re-offer whose second submit hits the unique index resolves to the already-posted
@@ -516,6 +543,9 @@ def _submit_atomically(doc_payload: dict):
     try:
         sinv = frappe.get_doc(doc_payload)
         sinv.insert()
+        if doc_payload.get("payments"):
+            # RT-78: verify ERPNext's computed totals settle the invoice exactly before submitting.
+            assert_settled({field: sinv.get(field) for field in SETTLED_FIELDS})
         sinv.submit()
     except BaseException:
         frappe.db.rollback(save_point=_SUBMIT_SAVEPOINT)

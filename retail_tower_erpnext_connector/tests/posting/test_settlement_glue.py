@@ -25,7 +25,11 @@ import pytest
 
 from retail_tower_erpnext_connector.connector.posting import contracts as c
 from retail_tower_erpnext_connector.connector.posting.tender import TenderModeMap
-from retail_tower_erpnext_connector.connector.posting.uom import PreResolvedWarehouse, StoreCustomerMap, UomMap
+from retail_tower_erpnext_connector.connector.posting.uom import (
+	PreResolvedWarehouse,
+	StoreCustomerMap,
+	UomMap,
+)
 
 _GLUE = "retail_tower_erpnext_connector.connector.posting.frappe_glue"
 _PKG = "retail_tower_erpnext_connector.connector.posting"

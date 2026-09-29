@@ -22,25 +22,26 @@ class TestTenderModeMap:
             t.TenderModeMap({}).resolve("cash")
 
 
+_EXACT = {
+    "grand_total": 10.49,
+    "paid_amount": 10.49,
+    "change_amount": 0.0,
+    "write_off_amount": 0.0,
+    "outstanding_amount": 0.0,
+}
+
+
 class TestAssertSettled:
     """RT-78: after ERPNext computes totals on insert, a settled invoice must balance EXACTLY.
 
     Amendment 4a: never invent change, leave a partial balance or write anything off.
     """
 
-    _EXACT = {
-        "grand_total": 10.49,
-        "paid_amount": 10.49,
-        "change_amount": 0.0,
-        "write_off_amount": 0.0,
-        "outstanding_amount": 0.0,
-    }
-
     def test_exactly_settled_invoice_passes(self):
-        t.assert_settled(self._EXACT)
+        t.assert_settled(_EXACT)
 
     def test_exactly_settled_return_passes(self):
-        t.assert_settled({**self._EXACT, "grand_total": -10.49, "paid_amount": -10.49})
+        t.assert_settled({**_EXACT, "grand_total": -10.49, "paid_amount": -10.49})
 
     @pytest.mark.parametrize(
         "drift",
@@ -53,7 +54,7 @@ class TestAssertSettled:
     )
     def test_any_residual_is_a_settlement_drift(self, drift):
         with pytest.raises(t.SettlementDrift):
-            t.assert_settled({**self._EXACT, **drift})
+            t.assert_settled({**_EXACT, **drift})
 
     def test_missing_computed_fields_count_as_zero(self):
         t.assert_settled({"grand_total": 5.0, "paid_amount": 5.0})

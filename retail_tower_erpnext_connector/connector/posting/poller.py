@@ -90,6 +90,7 @@ def _build_posting_path():
     """
     from .config import require_configured_maps
     from .frappe_glue import post_work_item  # local import: glue imports frappe-only symbols
+    from .tender import TenderModeMap
     from .transport import PostingFeedClient
     from .uom import PreResolvedWarehouse, StoreCustomerMap, UomMap
 
@@ -110,6 +111,9 @@ def _build_posting_path():
     warehouse = _load_warehouse_map(settings)
     customer = _load_store_customer_map(settings)
     require_configured_maps(uom=uom, warehouse=warehouse, customer=customer)
+    # RT-78 / RT-10 D5 — NOT a required map: an empty one is fine while sales are tender-unknown;
+    # a tender-bearing sale with an unmapped method then fails closed per item (validation).
+    tender_modes = _load_tender_mode_map(settings)
 
     transport = _build_http_transport(settings)  # auth-backed HTTP client to DP2 (spec 003)
     client = PostingFeedClient(transport, correlation_id=correlation_id)
@@ -117,6 +121,7 @@ def _build_posting_path():
     uom_map = UomMap(uom)
     warehouses = PreResolvedWarehouse(warehouse)
     customers = StoreCustomerMap(customer)  # F-009
+    tenders = TenderModeMap(tender_modes)  # RT-78
 
     def post_valid(work_item) -> None:
         post_work_item(
@@ -126,6 +131,7 @@ def _build_posting_path():
             uom_map=uom_map,
             warehouses=warehouses,
             customers=customers,
+            tenders=tenders,
             correlation_id=correlation_id,
         )
 
@@ -251,6 +257,12 @@ def _load_store_customer_map(settings) -> dict:
     from .config import parse_store_customer_map
 
     return parse_store_customer_map(settings.store_customer_map)
+
+
+def _load_tender_mode_map(settings) -> dict:
+    from .config import parse_tender_mode_map
+
+    return parse_tender_mode_map(settings.tender_mode_map)
 
 
 def _load_cursor() -> str | None:
