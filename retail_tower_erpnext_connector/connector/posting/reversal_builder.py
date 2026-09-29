@@ -18,10 +18,12 @@ path and no duplicated line loop. This builder then:
   - writes the provenance fields from the #28 discriminator: ``rt_external_id`` =
     ``idempotency.provenance_id(work_item)`` (= ``work_item.work_item_ref`` for a reversal),
     ``rt_source_system`` = ``work_item.source_system`` (THE F-002 RULE — see below);
-  - posts on the reversal work-item's ``business_date`` with ``set_posting_time = 1`` (RT-49).
-    Today DP2 sends the ORIGINAL sale's business date there (``posting-work-item.projection.ts``),
-    so a void posts in the sale's fiscal day; the glue then raises the stamp to the original
-    invoice's posting timestamp if that is later (``posting_time.raise_to_original``).
+  - posts ON the reversal's own business day AT its server event time (RT-16 / RT-63, decision
+    10348): ``reversalOf.businessDate`` + ``reversalOf.recordedAt`` with ``set_posting_time = 1``, so
+    a late void is NOT back-dated into the sale's day (:func:`reversal_stamp_source`). An older
+    Backend-Core that sends neither falls back to the RT-49 rule (the sale's ``occurredAt`` on the
+    work item's ``businessDate``). The glue then raises the stamp to the original invoice's posting
+    timestamp if that is later (``posting_time.raise_to_original``).
 
 THE CRITICAL CORRECTNESS CONSTRAINT (F-002 + Connector #28): the ``unique_rt_si_provenance`` index
 spans ALL Sales Invoices via ``rt_external_id``. DP2 emits the ORIGINAL sale's ``externalId`` as the
@@ -80,6 +82,19 @@ def _mode_from_original(method: str) -> None:
 	(Mode of Payment is mandatory) instead of refunding through a guessed or current mode.
 	"""
 	return None
+
+
+def reversal_stamp_source(work_item: PostingWorkItem) -> tuple[str, str]:
+	"""``(event time, business date)`` a reversal is stamped from (RT-16 / RT-63, decision 10348).
+
+	The reversal's own ``recordedAt`` + ``businessDate`` when Backend-Core sends both; otherwise the
+	RT-49 fallback — the sale's ``occurredAt`` on the work item's ``businessDate``. Shared by the
+	builder's default stamp and the glue's site-clock stamp, so both always agree.
+	"""
+	ref = work_item.reversal_of
+	if ref is not None and ref.recorded_at is not None and ref.business_date is not None:
+		return ref.recorded_at, ref.business_date
+	return work_item.sale.occurred_at, work_item.business_date
 
 
 def build_reversing_invoice(
@@ -153,7 +168,7 @@ def build_reversing_invoice(
 	doc["rt_source_system"] = work_item.source_system
 	doc["rt_external_id"] = provenance_id(work_item)
 
-	# RT-49: the credit note posts on the reversal work-item's businessDate (set_posting_time=1).
-	# The forward builder stamped sale.business_date — replace it with the reversal's stamp.
-	stamp = posting_stamp or stamp_for(work_item.sale.occurred_at, work_item.business_date, UTC_CLOCK)
+	# RT-16 / RT-63: the credit note posts on the reversal's own day at its own time (RT-49 fallback
+	# when absent). The forward builder stamped the sale's day — replace it with the reversal's stamp.
+	stamp = posting_stamp or stamp_for(*reversal_stamp_source(work_item), UTC_CLOCK)
 	return apply_stamp(doc, stamp)

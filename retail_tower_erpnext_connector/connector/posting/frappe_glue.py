@@ -35,7 +35,7 @@ from .contracts import ErpnextDocumentRef, OutcomeAckRequest, PostingWorkItem
 from .idempotency import IdempotencyConflict, IdempotencyStore, key_for, provenance_id
 from .posting_time import PostingClock, PostingStamp, apply_stamp, raise_to_original, stamp_for
 from .reasons import FailureKind, scrub_message, to_rejection_reason
-from .reversal_builder import build_reversing_invoice
+from .reversal_builder import build_reversing_invoice, reversal_stamp_source
 from .reversal_policy import UnsupportedReversal, assert_reversal_supported
 from .stock_policy import (
     ReturnLineMismatch,
@@ -365,7 +365,8 @@ def _post_reversal(
     # mapping as the forward path: unmapped unit → unmapped_unit; money/warehouse/store → validation;
     # anything else → other. A final `except Exception` guarantees the terminal-outcome invariant.
     try:
-        stamp = _posting_stamp(work_item, work_item.business_date)
+        # RT-16 / RT-63: the reversal's own recordedAt + businessDate (RT-49 fallback when absent).
+        stamp = stamp_for(*reversal_stamp_source(work_item), _posting_clock())
         # RT-78: no tender map here — a void's Modes of Payment come from the original invoice.
         doc_payload = build_reversing_invoice(
             work_item,

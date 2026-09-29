@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import date, datetime
 
 # 012 RejectionReason.category — the closed set. No new wire reason is ever invented
 # (FR-007). An unmapped unit is a `validation` failure (there is no `unmapped_uom`).
@@ -78,23 +79,70 @@ class ErpnextDocumentRef:
         return {"doctype": self.doctype, "name": self.name}
 
 
+# Reversal kinds that carry their own persisted business date (RT-63 P2; a legacy refund has none).
+_DATED_REVERSAL_KINDS: frozenset[str] = frozenset({"void", "return"})
+
+
+def _optional_instant(wire: Mapping[str, object], field: str) -> str | None:
+    """An optional RFC 3339 ``date-time`` string, validated (never re-formatted)."""
+    value = wire.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, str) or "T" not in value:
+        raise ValueError(f"ReversalRef.{field} must be an RFC 3339 date-time string, got {value!r}")
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError(f"ReversalRef.{field} is not a valid date-time: {value!r}") from None
+    return value
+
+
+def _optional_date(wire: Mapping[str, object], field: str) -> str | None:
+    """An optional ISO ``date`` (YYYY-MM-DD) string, validated."""
+    value = wire.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, str) or len(value) != 10:
+        raise ValueError(f"ReversalRef.{field} must be a YYYY-MM-DD date string, got {value!r}")
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        raise ValueError(f"ReversalRef.{field} is not a valid date: {value!r}") from None
+    return value
+
+
 @dataclass(frozen=True)
 class ReversalRef:
-    """012 ``ReversalRef`` — provenance of the original sale a reversal targets (O-4)."""
+    """012 ``ReversalRef`` — provenance of the original sale a reversal targets (O-4).
+
+    RT-16 / RT-63 (decision 10348): ``recorded_at`` is the reversal's server event time and
+    ``business_date`` its own business day. Both are optional on parse — an older Backend-Core sends
+    neither and the connector falls back to the RT-49 sale-derived stamp.
+    """
 
     source_system: str
     external_id: str
     reversal_kind: str
+    recorded_at: str | None = None
+    business_date: str | None = None
 
     @classmethod
     def from_wire(cls, wire: Mapping[str, object]) -> ReversalRef:
         kind = str(wire["reversalKind"])
         if kind not in REVERSAL_KINDS:
             raise ValueError(f"reversalKind must be one of {sorted(REVERSAL_KINDS)}, got {kind!r}")
+        recorded_at = _optional_instant(wire, "recordedAt")
+        business_date = _optional_date(wire, "businessDate")
+        if kind in _DATED_REVERSAL_KINDS and recorded_at is not None and business_date is None:
+            # posting-feed 1.3: a void/return carries its own businessDate. A time without its day
+            # cannot be stamped correctly (and must never silently fall back to the sale's day).
+            raise ValueError(f"ReversalRef for {kind!r} carries recordedAt but no businessDate (RT-63)")
         return cls(
             source_system=str(wire["sourceSystem"]),
             external_id=str(wire["externalId"]),
             reversal_kind=kind,
+            recorded_at=recorded_at,
+            business_date=business_date,
         )
 
 
