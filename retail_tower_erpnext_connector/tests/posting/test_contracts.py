@@ -414,6 +414,14 @@ class TestSaleLineRef:
         wi = c.PostingWorkItem.from_wire(_return_wire())
         assert [line.line_ref for line in wi.sale.lines] == [_LINE_A, _LINE_B]
 
+    def test_duplicate_line_refs_in_one_sale_are_malformed(self):
+        # Greptile PR #50: lineRef = sale_lines.id is unique per sale; a duplicate would post two
+        # invoice rows with one rt_line_ref and make every later return of that line unmatchable.
+        wire = _return_wire()
+        wire["sale"]["lines"][1]["lineRef"] = _LINE_A
+        with pytest.raises(ValueError, match="duplicate lineRef"):
+            c.PostingWorkItem.from_wire(wire)
+
     def test_an_older_feed_without_line_ref_still_parses(self):
         assert c.PostingWorkItem.from_wire(_wire_work_item()).sale.lines[0].line_ref is None
 

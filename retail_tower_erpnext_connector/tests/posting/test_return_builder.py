@@ -90,14 +90,13 @@ def _uom(unit):
 
 
 def _build(work_item, **kw):
-	return rtb.build_return_invoice(
-		work_item,
+	resolvers = rtb.ReturnResolvers(
 		uom_for=_uom,
 		warehouse_for=lambda store: {"doctype": "Warehouse", "name": "Main - RT"},
 		customer_for=lambda store: "Walk-in Customer - RT",
 		mode_of_payment_for=kw.pop("mode_of_payment_for", t.TenderModeMap({"cash": "Cash"}).resolve),
-		**kw,
 	)
+	return rtb.build_return_invoice(work_item, resolvers, **kw)
 
 
 class TestReturnedLinesOnly:

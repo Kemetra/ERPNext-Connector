@@ -164,10 +164,10 @@ def _line(ref, item, qty, amount):
 		"lineAmount": amount, "unit": "each", "erpnextItemRef": {"doctype": "Item", "name": item}}
 
 
-def _return(refund=(("cash", "100.00"),)):
+def _return(refund=(("cash", "100.00"),), tax=None):
 	ref = {"sourceSystem": "pos-pulse", "externalId": "POS-9001", "reversalKind": "return",
 		"recordedAt": "2026-06-05T09:30:00Z", "businessDate": "2026-06-05",
-		"returnLines": [{"lineRef": _A, "quantity": "1", "lineAmount": "100.00", "taxAmount": None}]}
+		"returnLines": [{"lineRef": _A, "quantity": "1", "lineAmount": "100.00", "taxAmount": tax}]}
 	if refund is not None:
 		ref["refundTenders"] = [{"method": m, "amount": a} for m, a in refund]
 	return c.PostingWorkItem.from_wire({
@@ -214,6 +214,13 @@ class TestReturnInGlue:
 	def test_return_without_refund_tenders_is_rejected_before_building(self, load_glue):
 		fake = _Frappe()
 		outcome, client, _store = _post(load_glue(fake), _return(refund=None))
+		assert outcome == "permanently_rejected" and client.acks[0]["reason"]["category"] == "validation"
+		assert fake.payloads == []
+
+	def test_a_taxed_return_line_is_a_validation_rejection(self, load_glue):
+		# Greptile PR #50: ReturnTaxNotPosted must map to `validation`, not the generic `other`.
+		fake = _Frappe()
+		outcome, client, _store = _post(load_glue(fake), _return(tax="14.00"))
 		assert outcome == "permanently_rejected" and client.acks[0]["reason"]["category"] == "validation"
 		assert fake.payloads == []
 
