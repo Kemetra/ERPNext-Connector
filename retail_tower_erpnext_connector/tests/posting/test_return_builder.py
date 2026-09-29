@@ -9,6 +9,7 @@ cash out from ``refundTenders`` (never from the sale's tenders). All fixtures ar
 """
 
 import dataclasses
+from decimal import Decimal
 
 import pytest
 
@@ -21,10 +22,12 @@ _A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 _B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 
 
-def _line(ref, name, item, qty, price, amount):
+def _line(ref, item, qty, amount):
+	"""A sale line whose unit price is amount / qty (exact for these fixtures)."""
+	price = f"{Decimal(amount) / Decimal(qty):.2f}"
 	return {
 		"lineRef": ref,
-		"lineName": name,
+		"lineName": item,
 		"unitPrice": price,
 		"currencyCode": "EGP",
 		"quantity": qty,
@@ -59,8 +62,8 @@ def _return(return_lines=None, refund_tenders=None, sale_tenders=None, *, drop_r
 		"sourceSystem": "pos-pulse",
 		"externalId": "POS-9001",
 		"lines": [
-			_line(_A, "Item A", "ITEM-A", "3", "100.00", "300.00"),
-			_line(_B, "Item B", "ITEM-B", "1", "50.00", "50.00"),
+			_line(_A, "ITEM-A", "3", "300.00"),
+			_line(_B, "ITEM-B", "1", "50.00"),
 		],
 	}
 	if sale_tenders is not None:
@@ -196,7 +199,7 @@ class TestRefundPayout:
 		# Codex P2 PR #50: no tax rows are posted (VAT 0 today). A taxed line must be rejected even
 		# when the refund equals the line amount, never posted with its tax silently dropped.
 		lines = [{"lineRef": _A, "quantity": "1", "lineAmount": "100.00", "taxAmount": "14.00"}]
-		with pytest.raises(rtb.ReturnTaxNotPosted, match="14.00"):
+		with pytest.raises(rtb.ReturnTaxNotPosted, match=r"14\.00"):
 			_build(_return(return_lines=lines, refund_tenders=[{"method": "cash", "amount": refund}]))
 
 	def test_a_zero_tax_amount_is_accepted(self):

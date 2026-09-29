@@ -26,8 +26,9 @@ total that differs from the returned total, an unmapped refund method, and a ret
 ``lineAmount`` is not exactly ``unitPrice x quantity`` (ERPNext recomputes ``amount = rate x qty``,
 so it would post a different amount than Backend-Core recorded).
 
-Tax: like the forward builder, no tax rows are posted (Egyptian VAT is 0 today). A return line with
-a non-zero ``taxAmount`` therefore cannot settle and is rejected by the total check.
+Tax: like the forward builder, no tax rows are posted (Egyptian VAT is 0 today), so a return line
+with a non-zero ``taxAmount`` is rejected outright (:class:`ReturnTaxNotPosted`) — never posted with
+its tax silently dropped, whatever the refund covers (Codex P2, PR #50).
 """
 
 from __future__ import annotations
@@ -63,6 +64,16 @@ class ReturnPricingMismatch(Exception):
 		)
 
 
+class ReturnTaxNotPosted(Exception):
+	"""A returned line carries a non-zero ``taxAmount`` while no tax rows are posted — validation."""
+
+	def __init__(self, line_ref: str, tax_amount: str) -> None:
+		super().__init__(
+			f"return line {line_ref}: taxAmount {tax_amount} cannot be posted (no tax rows while VAT is 0) "
+			"— rejected as validation rather than posted with the tax silently dropped"
+		)
+
+
 def build_return_invoice(
 	work_item: PostingWorkItem,
 	*,
@@ -78,12 +89,7 @@ def build_return_invoice(
 	tender map, applied to the refund tenders. ``posting_stamp`` is the glue's site-clock stamp;
 	without one the return's own ``recordedAt`` / ``businessDate`` are used in UTC.
 	"""
-	ref = work_item.reversal_of
-	if work_item.kind != "reversal" or ref is None or ref.reversal_kind != "return":
-		raise ValueError("build_return_invoice expects a reversal work-item of reversalKind 'return'")
-	if not ref.refund_tenders:
-		raise MissingRefundTenders()
-
+	ref = _return_ref(work_item)
 	returned_sale = dataclasses.replace(
 		work_item.sale,
 		lines=tuple(_returned_line(work_item, rl) for rl in ref.return_lines),
@@ -99,11 +105,7 @@ def build_return_invoice(
 
 	doc["is_return"] = 1
 	doc["update_stock"] = 1  # the glue mirrors the original invoice's update_stock
-	for item in doc["items"]:
-		item["qty"] = _negate(item["qty"])
-		item["amount"] = _negate(item["amount"])
-	for payment in doc["payments"]:
-		payment["amount"] = _negate(payment["amount"])
+	_negate_rows(doc)
 
 	# Provenance is the return's own work item (Connector #28), never the original sale's id.
 	doc["rt_source_system"] = work_item.source_system
@@ -113,8 +115,29 @@ def build_return_invoice(
 	return apply_stamp(doc, stamp)
 
 
+def _return_ref(work_item: PostingWorkItem):
+	"""The work item's ``return`` reference; fail closed on another kind or no refund tenders."""
+	ref = work_item.reversal_of
+	if ref is None or ref.reversal_kind != "return":
+		raise ValueError("build_return_invoice expects a reversal work-item of reversalKind 'return'")
+	if not ref.refund_tenders:
+		raise MissingRefundTenders()
+	return ref
+
+
+def _negate_rows(doc: dict) -> None:
+	"""Return semantics: negate every item qty/amount and payment amount (string-only, no float)."""
+	for item in doc["items"]:
+		item["qty"] = _negate(item["qty"])
+		item["amount"] = _negate(item["amount"])
+	for payment in doc["payments"]:
+		payment["amount"] = _negate(payment["amount"])
+
+
 def _returned_line(work_item: PostingWorkItem, returned: ReturnLine) -> SaleLine:
 	"""The sale line ``returned`` points at, re-quantified to the returned quantity and amount."""
+	if returned.tax_amount is not None and Decimal(returned.tax_amount) != 0:
+		raise ReturnTaxNotPosted(returned.line_ref, returned.tax_amount)
 	sale_line = next(line for line in work_item.sale.lines if line.line_ref == returned.line_ref)
 	if Decimal(sale_line.unit_price) * Decimal(returned.quantity) != Decimal(returned.line_amount):
 		raise ReturnPricingMismatch(

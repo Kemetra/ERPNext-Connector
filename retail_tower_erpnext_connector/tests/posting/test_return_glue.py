@@ -95,7 +95,7 @@ class _Frappe(types.ModuleType):
 		)
 		self.utils = types.SimpleNamespace(get_system_timezone=lambda: "UTC")
 
-	def _get_value(self, doctype, filters, fields, as_dict=False, **_):
+	def _get_value(self, doctype, filters, fields, **_):
 		if isinstance(filters, dict):  # provenance lookups
 			if filters.get("rt_external_id") == "POS-9001" and filters.get("docstatus") == 1:
 				return _ORIGINAL  # the original sale's invoice

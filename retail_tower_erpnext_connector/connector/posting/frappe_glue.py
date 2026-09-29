@@ -672,6 +672,7 @@ def _link_to_original(kind: str, doc_payload: dict, original: dict) -> dict:
             doc_payload,
             original_update_stock=original["update_stock"],
             original_items=original["items"],
+            original_customer=original["customer"],
         )
     return link_void_to_original(
         doc_payload,
@@ -688,18 +689,19 @@ def _read_original_invoice(name: str) -> dict:
 
     ``update_stock`` (RT-48), ``disable_rounded_total`` (RT-80), ``is_pos`` and its payment rows
     ``(mode_of_payment, amount, idx)`` (RT-78), and its item rows
-    ``(name, item_code, qty, idx, warehouse, rt_line_ref)`` (RT-48; ``rt_line_ref`` RT-16 D6). The
+    ``(name, item_code, qty, idx, warehouse, rt_line_ref, uom)`` (RT-48; ``rt_line_ref``/``uom`` RT-16)
+    and the ``customer`` a partial return credits. The
     rows are filtered by ``parent`` — the original only, never an earlier credit note's rows.
 
     ⏳ BENCH-VALIDATION.
     """
     flags = frappe.db.get_value(
-        "Sales Invoice", name, ["update_stock", "disable_rounded_total", "is_pos"], as_dict=True
+        "Sales Invoice", name, ["update_stock", "disable_rounded_total", "is_pos", "customer"], as_dict=True
     ) or {}
     rows = frappe.get_all(
         "Sales Invoice Item",
         filters={"parent": name, "parenttype": "Sales Invoice"},
-        fields=["name", "item_code", "qty", "idx", "warehouse", "rt_line_ref"],
+        fields=["name", "item_code", "qty", "idx", "warehouse", "rt_line_ref", "uom"],
         order_by="idx asc",
     )
     payments = frappe.get_all(
@@ -712,6 +714,7 @@ def _read_original_invoice(name: str) -> dict:
         "update_stock": int(flags.get("update_stock") or 0),
         "disable_rounded_total": int(flags.get("disable_rounded_total") or 0),
         "is_pos": int(flags.get("is_pos") or 0),
+        "customer": flags.get("customer"),
         "items": [dict(row) for row in rows],
         "payments": [dict(row) for row in payments],
     }

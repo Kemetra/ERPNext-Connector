@@ -208,6 +208,7 @@ def link_return_to_original(
 	*,
 	original_update_stock: int,
 	original_items: Sequence[Mapping[str, object]],
+	original_customer: str,
 ) -> dict:
 	"""Return a copy of the partial-return ``doc`` linked to its ORIGINAL invoice rows (RT-16).
 
@@ -215,7 +216,9 @@ def link_return_to_original(
 	sale-line identity — never by position, since a return carries any subset of the lines. The
 	match is checked for ``item_code`` and for a quantity no larger than that row sold, then gets
 	``sales_invoice_item`` (so ERPNext's cumulative over-return cap applies) and the ORIGINAL row's
-	warehouse. ``update_stock`` mirrors the original's. ``original_items`` must be the original
+	warehouse and UOM (a unit map changed since the sale must not change what the quantity means).
+	``update_stock`` and the ``customer`` mirror the original invoice (a store map changed since the
+	sale must not credit another customer — Codex P2, PR #50). ``original_items`` must be the original
 	invoice's own rows (the glue filters by parent), each with ``rt_line_ref``. An original posted
 	before RT-16 carries no line refs and fails closed (:class:`ReturnLineMismatch`): the owner chose
 	identity over positional pairing (D6).
@@ -227,9 +230,12 @@ def link_return_to_original(
 		row = _row_for_line_ref(pos, line, original_items)
 		_check_return_row(pos, line, row)
 		line["sales_invoice_item"] = row["name"]
-		if row.get("warehouse"):
-			line["warehouse"] = row["warehouse"]
+		for field in ("warehouse", "uom"):
+			if row.get(field):
+				line[field] = row[field]
 	out["update_stock"] = 1 if int(original_update_stock or 0) else 0
+	if original_customer:
+		out["customer"] = original_customer
 	return out
 
 
