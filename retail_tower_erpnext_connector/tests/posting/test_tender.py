@@ -60,7 +60,7 @@ class TestAssertSettled:
         # Codex P2 PR #50 round 3: 3.3333 requested, ERPNext rounds item AND payment to 3.33 — the
         # invoice balances internally but no longer equals what Backend-Core recorded.
         rounded = {**_EXACT, "grand_total": 3.33, "paid_amount": 3.33}
-        with pytest.raises(t.SettlementDrift, match="3.3333"):
+        with pytest.raises(t.SettlementDrift, match=r"3.3333"):
             t.assert_settled(rounded, expected_total="3.3333")
 
     def test_expected_total_matches_exactly(self):

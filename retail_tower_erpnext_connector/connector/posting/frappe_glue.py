@@ -59,6 +59,7 @@ from .tender import (
     TenderModeMap,
     UnmappedTender,
     assert_settled,
+    payments_total,
 )
 from .transport import PostingFeedClient
 from .uom import (
@@ -556,7 +557,10 @@ def _submit_atomically(doc_payload: dict):
         sinv.insert()
         if doc_payload.get("payments"):
             # RT-78: verify ERPNext's computed totals settle the invoice exactly before submitting.
-            assert_settled({field: sinv.get(field) for field in SETTLED_FIELDS})
+            assert_settled(
+                {field: sinv.get(field) for field in SETTLED_FIELDS},
+                expected_total=payments_total(doc_payload["payments"]),
+            )
         sinv.submit()
     except BaseException:
         frappe.db.rollback(save_point=_SUBMIT_SAVEPOINT)
@@ -714,7 +718,7 @@ def _read_original_invoice(name: str) -> dict:
     rows = frappe.get_all(
         "Sales Invoice Item",
         filters={"parent": name, "parenttype": "Sales Invoice"},
-        fields=["name", "item_code", "qty", "idx", "warehouse", "rt_line_ref", "uom"],
+        fields=["name", "item_code", "qty", "idx", "warehouse", "rt_line_ref", "uom", "conversion_factor"],
         order_by="idx asc",
     )
     payments = frappe.get_all(

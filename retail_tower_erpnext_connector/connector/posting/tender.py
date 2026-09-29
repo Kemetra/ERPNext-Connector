@@ -114,17 +114,35 @@ class SettlementDrift(Exception):
 SETTLED_FIELDS = ("grand_total", "paid_amount", "change_amount", "write_off_amount", "outstanding_amount")
 
 
-def assert_settled(totals: Mapping[str, object]) -> None:
+def payments_total(payments: Sequence[Mapping[str, object]]) -> str:
+    """The exact total of the requested payment rows (exact-decimal strings), as a string."""
+    return str(sum((Decimal(str(p["amount"])) for p in payments), Decimal(0)))
+
+
+def assert_settled(totals: Mapping[str, object], *, expected_total: str | None = None) -> None:
     """Raise :class:`SettlementDrift` unless ``paid_amount == grand_total`` with no residual.
 
     ``totals`` carries ERPNext's computed Sales Invoice values (floats from the document); each is
     compared as a :class:`Decimal` built from its string form. A missing value counts as zero.
+    ``expected_total`` is the EXACT total the connector requested (:func:`payments_total`): when
+    given, ``grand_total`` must equal it too, so ERPNext rounding both the rows and the payments to
+    its currency precision (3.3333 -> 3.33) cannot pass as settled (Codex P2, PR #50).
     """
     values = {f: Decimal(str(totals.get(f) or 0)) for f in SETTLED_FIELDS}
+    _assert_requested_total(values["grand_total"], expected_total)
     residual = {f: values[f] for f in ("change_amount", "write_off_amount", "outstanding_amount") if values[f]}
     if values["paid_amount"] != values["grand_total"] or residual:
         raise SettlementDrift(
             f"invoice does not settle exactly after ERPNext computed its totals: grand_total "
             f"{values['grand_total']}, paid_amount {values['paid_amount']}, residual {residual or 'none'} "
             "— rolled back, rejected as validation (amendment 4a)"
+        )
+
+
+def _assert_requested_total(grand_total: Decimal, expected_total: str | None) -> None:
+    """ERPNext's computed total must equal the exact total the connector requested (no rounding)."""
+    if expected_total is not None and grand_total != Decimal(expected_total):
+        raise SettlementDrift(
+            f"ERPNext computed grand_total {grand_total} != requested total {expected_total} "
+            "(currency precision rounding) — rolled back, rejected as validation (amendment 4a)"
         )
