@@ -49,6 +49,7 @@ bench-pending ``frappe_glue`` reversal leg resolves the original SI by
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable
 
 from .builder import build_sales_invoice
@@ -72,6 +73,15 @@ def _negate(amount: str) -> str:
 	return f"-{amount}"
 
 
+def _mode_from_original(method: str) -> None:
+	"""A void's Mode of Payment is filled from the ORIGINAL invoice's payment rows in the glue.
+
+	Left ``None`` here on purpose: if that mirror step were ever skipped, ERPNext rejects the row
+	(Mode of Payment is mandatory) instead of refunding through a guessed or current mode.
+	"""
+	return None
+
+
 def build_reversing_invoice(
 	work_item: PostingWorkItem,
 	*,
@@ -87,17 +97,32 @@ def build_reversing_invoice(
 	negated. Raises :class:`ValueError` if handed a non-reversal work-item (it would mis-post).
 	``posting_stamp`` is the RT-49 posting date/time (glue: site clock); without one it is derived
 	from ``sale.occurredAt`` and the reversal's ``business_date`` in UTC.
+	RT-78 / RT-10 D6: a ``void`` refunds by mirroring ``sale.tenders`` as NEGATIVE payment amounts;
+	a void of a tender-unknown sale stays an outstanding credit note. The rows carry NO Mode of
+	Payment here: the glue fills each one from the ORIGINAL invoice's own payment rows
+	(``stock_policy.link_void_to_original``), so a tender map changed since the sale can neither
+	block nor redirect the refund (Codex P2, PR #48). Any other kind never mirrors the sale's
+	tenders (a return pays out its own ``refundTenders`` — RT-16).
 	"""
 	if work_item.kind != "reversal":
 		raise ValueError(f"build_reversing_invoice expects a reversal work-item, got kind {work_item.kind!r}")
 
+	reversal_kind = work_item.reversal_of.reversal_kind if work_item.reversal_of else None
+	# RT-78 / RT-10 D6: only a void mirrors the sale's tenders. Strip them for any other kind, so the
+	# forward builder never settles (or tender-validates) a refund against the whole sale's payments.
+	source = work_item
+	if reversal_kind != "void" and work_item.sale.tenders:
+		source = dataclasses.replace(work_item, sale=dataclasses.replace(work_item.sale, tenders=()))
+
 	# Compose on the forward builder: this validates money (FR-009) on the POSITIVE magnitudes and
-	# resolves customer/currency/warehouse/UOM identically — one money path, no duplicated loop.
+	# resolves customer/currency/warehouse/UOM (and a void's tender modes) identically — one money
+	# path, no duplicated loop.
 	doc = build_sales_invoice(
-		work_item,
+		source,
 		uom_for=uom_for,
 		warehouse_for=warehouse_for,
 		customer_for=customer_for,
+		mode_of_payment_for=_mode_from_original,
 	)
 
 	# A credit note IS a Sales Invoice with is_return=1.
@@ -108,7 +133,6 @@ def build_reversing_invoice(
 	# quantity — refund stock semantics wait for RT-14/RT-16 (update_stock=0). A void keeps the
 	# forward builder's update_stock=1; the glue then MIRRORS the original invoice's update_stock
 	# (stock_policy.link_void_to_original) so a legacy update_stock=0 sale never fabricates stock.
-	reversal_kind = work_item.reversal_of.reversal_kind if work_item.reversal_of else None
 	doc["update_stock"] = 1 if reversal_kind == "void" else 0
 
 	# Return semantics: negate qty + amount (the credit note totals are negative); rate stays
@@ -116,6 +140,9 @@ def build_reversing_invoice(
 	for item in doc["items"]:
 		item["qty"] = _negate(item["qty"])
 		item["amount"] = _negate(item["amount"])
+	# A void pays the tenders back out: the payments carry the same sign as the credit note.
+	for payment in doc.get("payments") or []:
+		payment["amount"] = _negate(payment["amount"])
 
 	# THE F-002 + #28 RULE: the reversing doc's provenance is the per-reversal-distinct discriminator
 	# (work_item_ref), NOT the original sale's id (which is what reversal_of.* / sale.* / and the

@@ -72,12 +72,22 @@ def _original_rows():
 	]
 
 
-def _link(doc=None, *, original_update_stock=1, original_disable_rounded_total=1, original_items=None):
+def _link(
+	doc=None,
+	*,
+	original_update_stock=1,
+	original_disable_rounded_total=1,
+	original_items=None,
+	original_is_pos=0,
+	original_payments=(),
+):
 	return sp.link_void_to_original(
 		doc or _doc(is_return=1),
 		original_update_stock=original_update_stock,
 		original_disable_rounded_total=original_disable_rounded_total,
 		original_items=_original_rows() if original_items is None else original_items,
+		original_is_pos=original_is_pos,
+		original_payments=original_payments,
 	)
 
 
@@ -150,3 +160,70 @@ class TestVoidLinkage:
 	def test_rejects_a_non_return_document(self):
 		with pytest.raises(ValueError):
 			_link(_doc(is_return=0))
+
+
+def _paid_void(*payments):
+	"""A void return doc built from the reversal's sale.tenders (negated by the reversal builder)."""
+	doc = _doc(is_return=1)
+	doc["is_pos"] = 1
+	doc["payments"] = [{"mode_of_payment": m, "amount": a} for m, a in payments]
+	return doc
+
+
+# Shaped like frappe.get_all("Sales Invoice Payment", fields=[mode_of_payment, amount, idx]): the DB
+# amount is a FLOAT, so the policy must compare and copy it as an exact decimal.
+_ORIGINAL_PAYMENTS = [
+	{"mode_of_payment": "Cash", "amount": 150.0, "idx": 1},
+	{"mode_of_payment": "Card Clearing", "amount": 50.0, "idx": 2},
+]
+
+
+class TestVoidSettlementMirror:
+	"""RT-78 / RT-10 D6: a void pays back EXACTLY what the original invoice was paid with.
+
+	The payments are rebuilt from the original invoice's own rows (like its warehouse, Codex P1 PR
+	#42): a tender map remapped since the sale must not refund through a different Mode of Payment.
+	The void's sale.tenders only cross-check it; any disagreement fails closed (validation).
+	"""
+
+	def test_void_of_a_paid_original_mirrors_its_payment_rows(self):
+		doc = _link(
+			_paid_void(("Cash", "-150.00"), ("Card Clearing", "-50.00")),
+			original_is_pos=1,
+			original_payments=list(reversed(_ORIGINAL_PAYMENTS)),  # DB rows may arrive unordered
+		)
+		assert doc["is_pos"] == 1
+		assert doc["payments"] == [
+			{"mode_of_payment": "Cash", "amount": "-150.0"},
+			{"mode_of_payment": "Card Clearing", "amount": "-50.0"},
+		]
+
+	def test_payment_modes_come_from_the_original_not_the_current_map(self):
+		doc = _link(
+			_paid_void(("Cash (new)", "-200.00")),
+			original_is_pos=1,
+			original_payments=[{"mode_of_payment": "Cash", "amount": 200.0, "idx": 1}],
+		)
+		assert doc["payments"] == [{"mode_of_payment": "Cash", "amount": "-200.0"}]
+
+	def test_tender_unknown_void_of_an_unpaid_original_stays_unsettled(self):
+		doc = _link(original_is_pos=0)
+		assert "is_pos" not in doc and "payments" not in doc
+
+	def test_paid_void_of_an_unpaid_original_fails_closed(self):
+		# Cash would be paid out against a sale ERPNext never recorded as paid.
+		with pytest.raises(sp.VoidSettlementMismatch, match="unpaid"):
+			_link(_paid_void(("Cash", "-200.00")), original_is_pos=0)
+
+	def test_unpaid_void_of_a_paid_original_fails_closed(self):
+		# ERPNext would leave the refund as a customer credit instead of cash out (RT-75 T5).
+		with pytest.raises(sp.VoidSettlementMismatch, match="paid"):
+			_link(original_is_pos=1, original_payments=_ORIGINAL_PAYMENTS)
+
+	def test_void_tender_total_must_equal_the_original_payments(self):
+		with pytest.raises(sp.VoidSettlementMismatch, match="total"):
+			_link(_paid_void(("Cash", "-199.00")), original_is_pos=1, original_payments=_ORIGINAL_PAYMENTS)
+
+	def test_a_settlement_mismatch_is_a_return_line_mismatch(self):
+		# The glue maps ReturnLineMismatch to validation; the settlement check must ride that path.
+		assert issubclass(sp.VoidSettlementMismatch, sp.ReturnLineMismatch)

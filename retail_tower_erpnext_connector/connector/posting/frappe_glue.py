@@ -44,6 +44,14 @@ from .stock_policy import (
     link_void_to_original,
     tracking_item_codes,
 )
+from .tender import (
+    SETTLED_FIELDS,
+    SettlementDrift,
+    TenderMismatch,
+    TenderModeMap,
+    UnmappedTender,
+    assert_settled,
+)
 from .transport import PostingFeedClient
 from .uom import (
     MoneyConformanceError,
@@ -131,11 +139,15 @@ def post_work_item(
     uom_map: UomMap,
     warehouses: PreResolvedWarehouse,
     customers: StoreCustomerMap,
+    tenders: TenderModeMap,
     correlation_id: str,
 ) -> str:
     """Post one work-item to ERPNext and ack the outcome. Returns the resulting outcome string.
 
     ⏳ BENCH-VALIDATION — exercises live ``frappe`` APIs; validated on staging, not locally.
+    ``tenders`` is the RT-10 D5 tender → Mode of Payment map (RT-78): a sale carrying tenders is
+    settled on the invoice and an unmapped method fails closed. A void does not use it — it pays
+    back the original invoice's own payment rows.
     """
     key = key_for(work_item)
 
@@ -186,12 +198,15 @@ def post_work_item(
             warehouse_for=warehouses.for_store,
             customer_for=customers.for_store,
             posting_stamp=stamp,
+            mode_of_payment_for=tenders.resolve,
         )
     except UnmappedUnit as exc:
         return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, str(exc))
-    except (MoneyConformanceError, UnresolvedWarehouse, UnmappedStore) as exc:
+    except (MoneyConformanceError, UnresolvedWarehouse, UnmappedStore, UnmappedTender, TenderMismatch) as exc:
         # UnmappedStore (F-009): a store with no configured Customer fails closed → validation,
         # exactly like an unresolved warehouse — never fabricate a customer (Principle VI).
+        # RT-78: an unmapped tender method (D5) or a tender total that differs from the lines
+        # (amendment 4a) is the same — the connector never guesses a mode or forces a match.
         return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
     except Exception as exc:  # any other build error is non-retryable — never let it escape.
         return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
@@ -217,6 +232,11 @@ def post_work_item(
         )
         _log_signal("posting.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
         return "failed_transient"
+    except SettlementDrift as exc:
+        # RT-78 — ERPNext's computed totals left change/outstanding/write-off on a settled invoice.
+        # _submit_atomically already rolled the insert back; nothing was submitted. Caught BEFORE the
+        # dup-provenance clause, whose fallback catches Exception on a frappe missing those names.
+        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
     except _dup_provenance_exceptions() as exc:
         # GATE G5 / F-002 — the crash-window recovery. The `unique_rt_si_provenance` index rejected
         # a SECOND submit of an already-posted sale (a crash between the FIRST submit and
@@ -346,6 +366,7 @@ def _post_reversal(
     # anything else → other. A final `except Exception` guarantees the terminal-outcome invariant.
     try:
         stamp = _posting_stamp(work_item, work_item.business_date)
+        # RT-78: no tender map here — a void's Modes of Payment come from the original invoice.
         doc_payload = build_reversing_invoice(
             work_item,
             uom_for=uom_map.resolve,
@@ -355,7 +376,7 @@ def _post_reversal(
         )
     except UnmappedUnit as exc:
         return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, str(exc))
-    except (MoneyConformanceError, UnresolvedWarehouse, UnmappedStore) as exc:
+    except (MoneyConformanceError, UnresolvedWarehouse, UnmappedStore, UnmappedTender, TenderMismatch) as exc:
         return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
     except Exception as exc:  # any other build error is non-retryable — never let it escape.
         return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
@@ -393,12 +414,14 @@ def _post_reversal(
     # line semantics belong to RT-14/RT-16). Any line mismatch fails closed.
     if work_item.reversal_of is not None and work_item.reversal_of.reversal_kind == "void":
         try:
-            original_update_stock, original_rounding, original_rows = _read_original_invoice(original_name)
+            original = _read_original_invoice(original_name)
             doc_payload = link_void_to_original(
                 doc_payload,
-                original_update_stock=original_update_stock,
-                original_disable_rounded_total=original_rounding,
-                original_items=original_rows,
+                original_update_stock=original["update_stock"],
+                original_disable_rounded_total=original["disable_rounded_total"],
+                original_items=original["items"],
+                original_is_pos=original["is_pos"],
+                original_payments=original["payments"],
             )
         except ReturnLineMismatch as exc:
             return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
@@ -424,6 +447,11 @@ def _post_reversal(
         )
         _log_signal("posting.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
         return "failed_transient"
+    except SettlementDrift as exc:
+        # RT-78 — ERPNext's computed totals left change/outstanding/write-off on a settled invoice.
+        # _submit_atomically already rolled the insert back; nothing was submitted. Caught BEFORE the
+        # dup-provenance clause, whose fallback catches Exception on a frappe missing those names.
+        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
     except _dup_provenance_exceptions() as exc:
         # Crash-window recovery, keyed on the reversal's work_item_ref provenance (#28 re-key): a
         # re-offer whose second submit hits the unique index resolves to the already-posted
@@ -514,6 +542,9 @@ def _submit_atomically(doc_payload: dict):
     try:
         sinv = frappe.get_doc(doc_payload)
         sinv.insert()
+        if doc_payload.get("payments"):
+            # RT-78: verify ERPNext's computed totals settle the invoice exactly before submitting.
+            assert_settled({field: sinv.get(field) for field in SETTLED_FIELDS})
         sinv.submit()
     except BaseException:
         frappe.db.rollback(save_point=_SUBMIT_SAVEPOINT)
@@ -604,14 +635,17 @@ def _log_stamp_adjustments(stamp: PostingStamp, work_item: PostingWorkItem, corr
     )
 
 
-def _read_original_invoice(name: str) -> tuple[int, int, list[dict]]:
-    """Read the original SI's ``update_stock``, ``disable_rounded_total`` (RT-80) and its item rows
+def _read_original_invoice(name: str) -> dict:
+    """Read what a full void mirrors from the original SI (``stock_policy.link_void_to_original``).
+
+    ``update_stock`` (RT-48), ``disable_rounded_total`` (RT-80), ``is_pos`` and its payment rows
+    ``(mode_of_payment, amount, idx)`` (RT-78), and its item rows
     ``(name, item_code, qty, idx, warehouse)`` (RT-48).
 
-    ⏳ BENCH-VALIDATION. Feeds the pure ``stock_policy.link_void_to_original``.
+    ⏳ BENCH-VALIDATION.
     """
     flags = frappe.db.get_value(
-        "Sales Invoice", name, ["update_stock", "disable_rounded_total"], as_dict=True
+        "Sales Invoice", name, ["update_stock", "disable_rounded_total", "is_pos"], as_dict=True
     ) or {}
     rows = frappe.get_all(
         "Sales Invoice Item",
@@ -619,11 +653,19 @@ def _read_original_invoice(name: str) -> tuple[int, int, list[dict]]:
         fields=["name", "item_code", "qty", "idx", "warehouse"],
         order_by="idx asc",
     )
-    return (
-        int(flags.get("update_stock") or 0),
-        int(flags.get("disable_rounded_total") or 0),
-        [dict(row) for row in rows],
+    payments = frappe.get_all(
+        "Sales Invoice Payment",
+        filters={"parent": name, "parenttype": "Sales Invoice"},
+        fields=["mode_of_payment", "amount", "idx"],
+        order_by="idx asc",
     )
+    return {
+        "update_stock": int(flags.get("update_stock") or 0),
+        "disable_rounded_total": int(flags.get("disable_rounded_total") or 0),
+        "is_pos": int(flags.get("is_pos") or 0),
+        "items": [dict(row) for row in rows],
+        "payments": [dict(row) for row in payments],
+    }
 
 
 def _reject(

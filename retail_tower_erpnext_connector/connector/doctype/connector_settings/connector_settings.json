@@ -1,7 +1,7 @@
 {
  "actions": [],
  "creation": "2026-06-04 00:00:00.000000",
- "description": "Retail Tower connector configuration (spec 006 — sales posting; spec 007 — credential lifecycle). The DP2 posting-feed endpoint + auth token, the operator-owned mapping tables (unit→UOM, store→warehouse, store→customer) the scheduled poller reads each tick, and the registration-linked credential lifecycle (registration/credential refs + expiry) so the connector can warn before expiry instead of only reacting to a 401 (007 §5/§6). The token is a secret (Password field, Gate G4 — never logged); the lifecycle ids/timestamps are non-secret status.",
+ "description": "Retail Tower connector configuration (spec 006 — sales posting; spec 007 — credential lifecycle). The DP2 posting-feed endpoint + auth token, the operator-owned mapping tables (unit→UOM, store→warehouse, store→customer, tender→Mode of Payment) the scheduled poller reads each tick, and the registration-linked credential lifecycle (registration/credential refs + expiry) so the connector can warn before expiry instead of only reacting to a 401 (007 §5/§6). The token is a secret (Password field, Gate G4 — never logged); the lifecycle ids/timestamps are non-secret status.",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
@@ -17,7 +17,8 @@
   "maps_section",
   "uom_map",
   "warehouse_map",
-  "store_customer_map"
+  "store_customer_map",
+  "tender_mode_map"
  ],
  "fields": [
   {
@@ -98,11 +99,18 @@
    "options": "RT Store Customer Map Row",
    "label": "Store → Customer Map",
    "description": "Store→ERPNext-Customer map (F-009). The 012 work-item carries no customer; an unmapped store fails closed → validation. The connector never fabricates a customer (Principle VI)."
+  },
+  {
+   "fieldname": "tender_mode_map",
+   "fieldtype": "Table",
+   "options": "RT Tender Mode Map Row",
+   "label": "Tender → Mode of Payment Map",
+   "description": "RT-78 / RT-10 D5: maps each POS tender method to an ERPNext Mode of Payment (with a company account). A sale carrying tenders posts as a paid Sales Invoice; an unmapped method fails closed → validation. May stay empty while sales are tender-unknown (they post unpaid, as before)."
   }
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-06-12 00:00:00.000000",
+ "modified": "2026-09-29 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Connector",
  "name": "Connector Settings",

@@ -142,3 +142,13 @@ def assert_money_conformance(doc: Mapping[str, object]) -> None:
                 raise MoneyConformanceError(
                     f"items[{idx}].{field} must be an exact-decimal string, got {value!r}"
                 )
+
+    # RT-78: settlement payment amounts are money too — exact-decimal strings, never float.
+    for idx, payment in enumerate(doc.get("payments") or []):  # type: ignore[assignment]
+        value = payment.get("amount")
+        if isinstance(value, float):
+            raise MoneyConformanceError(f"payments[{idx}].amount is a float ({value!r}) — FR-009")
+        if not isinstance(value, str) or not _DECIMAL_RE.match(value):
+            raise MoneyConformanceError(
+                f"payments[{idx}].amount must be an exact-decimal string, got {value!r}"
+            )
