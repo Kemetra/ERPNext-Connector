@@ -354,7 +354,11 @@ class TestReversalTimestamps:
         with pytest.raises(ValueError, match="recordedAt"):
             c.PostingWorkItem.from_wire(self._reversal(recordedAt=recorded_at, businessDate="2026-06-05"))
 
-    @pytest.mark.parametrize("business_date", ["2026-13-01", "05/06/2026", 20260605, ""])
+    @pytest.mark.parametrize(
+        "business_date",
+        # Codex P2 PR #49 round 4: 10-char ISO week / ordinal dates pass fromisoformat on 3.11+.
+        ["2026-13-01", "05/06/2026", 20260605, "", "2026-W23-5", "2026-W23-5 ", "2026-156-1", "2026_06_05"],
+    )
     def test_malformed_business_date_raises(self, business_date):
         with pytest.raises(ValueError, match="businessDate"):
             c.PostingWorkItem.from_wire(
