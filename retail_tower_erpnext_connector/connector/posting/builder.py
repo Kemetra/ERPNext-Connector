@@ -82,18 +82,20 @@ def build_sales_invoice(
 
     items = []
     for line in sale.lines:
-        items.append(
-            {
-                # Apply the pre-resolved Item identity — no lookup (rider R2).
-                "item_code": line.erpnext_item_ref.name,
-                "qty": line.quantity,
-                "uom": uom_for(line.unit),
-                "rate": line.unit_price,
-                "amount": line.line_amount,
-                "warehouse": warehouse["name"],
-                "currency": line.currency_code,
-            }
-        )
+        item = {
+            # Apply the pre-resolved Item identity — no lookup (rider R2).
+            "item_code": line.erpnext_item_ref.name,
+            "qty": line.quantity,
+            "uom": uom_for(line.unit),
+            "rate": line.unit_price,
+            "amount": line.line_amount,
+            "warehouse": warehouse["name"],
+            "currency": line.currency_code,
+        }
+        if line.line_ref is not None:
+            # RT-16 / RT-14 D6: the sale-line identity a later partial return is matched on.
+            item["rt_line_ref"] = line.line_ref
+        items.append(item)
 
     # F-009 CLOSED: the customer is resolved from the operator-configured store→Customer map
     # (above), never fabricated. The 012 work-item carries no customer; the operator owns the

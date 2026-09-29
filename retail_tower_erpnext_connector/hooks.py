@@ -38,6 +38,9 @@ fixtures = [
 					"Sales Invoice-rt_source_system",
 					"Sales Invoice-rt_external_id",
 					"Sales Invoice-rt_sale_ref",
+					# RT-16 / RT-14 D6 (authorized, decision 10343): the sale-line identity a
+					# partial return is matched on.
+					"Sales Invoice Item-rt_line_ref",
 				],
 			]
 		],
