@@ -227,3 +227,90 @@ class TestVoidSettlementMirror:
 	def test_a_settlement_mismatch_is_a_return_line_mismatch(self):
 		# The glue maps ReturnLineMismatch to validation; the settlement check must ride that path.
 		assert issubclass(sp.VoidSettlementMismatch, sp.ReturnLineMismatch)
+
+
+_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+
+def _return_doc(*items):
+	"""A partial-return doc as build_return_invoice emits it: negated rows tagged with rt_line_ref."""
+	return {
+		"doctype": "Sales Invoice",
+		"is_return": 1,
+		"update_stock": 1,
+		"items": [
+			{"item_code": code, "qty": qty, "warehouse": "Map WH", "rt_line_ref": ref} for ref, code, qty in items
+		],
+	}
+
+
+def _original_with_refs():
+	# The ORIGINAL invoice's rows only (the glue filters by parent): qty is a DB float.
+	return [
+		{"name": "row-a", "item_code": "ITEM-A", "qty": 3.0, "idx": 1, "warehouse": "Stores - A", "rt_line_ref": _A},
+		{"name": "row-b", "item_code": "ITEM-B", "qty": 1.0, "idx": 2, "warehouse": "Stores - B", "rt_line_ref": _B},
+	]
+
+
+def _link_return(doc, *, original_update_stock=1, original_items=None):
+	return sp.link_return_to_original(
+		doc,
+		original_update_stock=original_update_stock,
+		original_items=_original_with_refs() if original_items is None else original_items,
+	)
+
+
+class TestReturnLinkage:
+	"""RT-16 / RT-14 D6: a partial return links each row to the ORIGINAL row by rt_line_ref.
+
+	Identity, not position (the void rule): a return carries a subset of the lines in any order.
+	The original row's warehouse is restored to, ERPNext's per-row over-return cap applies through
+	sales_invoice_item, and stock moves only if the sale moved it.
+	"""
+
+	def test_links_each_row_to_the_original_row_with_its_line_ref(self):
+		doc = _link_return(_return_doc((_B, "ITEM-B", "-1"), (_A, "ITEM-A", "-2")))
+		assert [(i["sales_invoice_item"], i["warehouse"]) for i in doc["items"]] == [
+			("row-b", "Stores - B"),
+			("row-a", "Stores - A"),
+		]
+
+	def test_mirrors_the_original_update_stock(self):
+		assert _link_return(_return_doc((_A, "ITEM-A", "-1")), original_update_stock=0)["update_stock"] == 0
+		assert _link_return(_return_doc((_A, "ITEM-A", "-1")), original_update_stock=1)["update_stock"] == 1
+
+	def test_an_original_posted_before_rt16_has_no_line_refs_and_fails_closed(self):
+		legacy = [{**row, "rt_line_ref": None} for row in _original_with_refs()]
+		with pytest.raises(sp.ReturnLineMismatch, match="rt_line_ref"):
+			_link_return(_return_doc((_A, "ITEM-A", "-1")), original_items=legacy)
+
+	def test_a_line_ref_the_original_does_not_carry_fails_closed(self):
+		with pytest.raises(sp.ReturnLineMismatch, match="cccccccc"):
+			_link_return(_return_doc(("cccccccc-cccc-4ccc-8ccc-cccccccccccc", "ITEM-A", "-1")))
+
+	def test_two_original_rows_with_one_line_ref_fail_closed(self):
+		dup = [*_original_with_refs(), {**_original_with_refs()[0], "name": "row-a2", "idx": 3}]
+		with pytest.raises(sp.ReturnLineMismatch, match="ambiguous"):
+			_link_return(_return_doc((_A, "ITEM-A", "-1")), original_items=dup)
+
+	def test_item_code_must_match_the_original_row(self):
+		with pytest.raises(sp.ReturnLineMismatch, match="ITEM-B"):
+			_link_return(_return_doc((_A, "ITEM-B", "-1")))
+
+	def test_cannot_return_more_than_the_original_row_sold(self):
+		with pytest.raises(sp.ReturnLineMismatch, match="sold"):
+			_link_return(_return_doc((_A, "ITEM-A", "-3.5")))
+
+	def test_returning_the_full_sold_quantity_is_allowed(self):
+		doc = _link_return(_return_doc((_A, "ITEM-A", "-3")))
+		assert doc["items"][0]["sales_invoice_item"] == "row-a"
+
+	def test_does_not_mutate_the_input_doc(self):
+		src = _return_doc((_A, "ITEM-A", "-1"))
+		_link_return(src)
+		assert "sales_invoice_item" not in src["items"][0] and src["items"][0]["warehouse"] == "Map WH"
+
+	def test_rejects_a_non_return_document(self):
+		with pytest.raises(ValueError):
+			_link_return({**_return_doc((_A, "ITEM-A", "-1")), "is_return": 0})
