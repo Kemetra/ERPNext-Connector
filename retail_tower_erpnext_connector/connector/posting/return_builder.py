@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable
+from dataclasses import dataclass
 from decimal import Decimal
 
 from .builder import build_sales_invoice
@@ -74,20 +75,29 @@ class ReturnTaxNotPosted(Exception):
 		)
 
 
+@dataclass(frozen=True)
+class ReturnResolvers:
+	"""The config resolvers a return is built with (mirroring :func:`builder.build_sales_invoice`).
+
+	``mode_of_payment_for`` is the RT-10 D5 tender map, applied to the refund tenders.
+	"""
+
+	uom_for: Callable[[str], str]
+	warehouse_for: Callable[[str], dict]
+	customer_for: Callable[[str], str]
+	mode_of_payment_for: Callable[[str], str]
+
+
 def build_return_invoice(
 	work_item: PostingWorkItem,
+	resolvers: ReturnResolvers,
 	*,
-	uom_for: Callable[[str], str],
-	warehouse_for: Callable[[str], dict],
-	customer_for: Callable[[str], str],
-	mode_of_payment_for: Callable[[str], str],
 	posting_stamp: PostingStamp | None = None,
 ) -> dict:
 	"""Build the return Sales-Invoice payload for one ``reversalKind: return`` work item.
 
-	Resolvers mirror :func:`builder.build_sales_invoice`; ``mode_of_payment_for`` is the RT-10 D5
-	tender map, applied to the refund tenders. ``posting_stamp`` is the glue's site-clock stamp;
-	without one the return's own ``recordedAt`` / ``businessDate`` are used in UTC.
+	``posting_stamp`` is the glue's site-clock stamp; without one the return's own ``recordedAt`` /
+	``businessDate`` are used in UTC.
 	"""
 	ref = _return_ref(work_item)
 	returned_sale = dataclasses.replace(
@@ -97,10 +107,10 @@ def build_return_invoice(
 	)
 	doc = build_sales_invoice(
 		dataclasses.replace(work_item, sale=returned_sale),
-		uom_for=uom_for,
-		warehouse_for=warehouse_for,
-		customer_for=customer_for,
-		mode_of_payment_for=mode_of_payment_for,
+		uom_for=resolvers.uom_for,
+		warehouse_for=resolvers.warehouse_for,
+		customer_for=resolvers.customer_for,
+		mode_of_payment_for=resolvers.mode_of_payment_for,
 	)
 
 	doc["is_return"] = 1

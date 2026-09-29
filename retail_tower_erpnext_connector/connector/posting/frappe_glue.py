@@ -35,7 +35,13 @@ from .contracts import ErpnextDocumentRef, OutcomeAckRequest, PostingWorkItem
 from .idempotency import IdempotencyConflict, IdempotencyStore, key_for, provenance_id
 from .posting_time import PostingClock, PostingStamp, apply_stamp, raise_to_original, stamp_for
 from .reasons import FailureKind, scrub_message, to_rejection_reason
-from .return_builder import MissingRefundTenders, ReturnPricingMismatch, build_return_invoice
+from .return_builder import (
+    MissingRefundTenders,
+    ReturnPricingMismatch,
+    ReturnResolvers,
+    ReturnTaxNotPosted,
+    build_return_invoice,
+)
 from .reversal_builder import build_reversing_invoice, reversal_stamp_source
 from .reversal_policy import UnsupportedReversal, assert_reversal_supported
 from .stock_policy import (
@@ -384,6 +390,7 @@ def _post_reversal(
         TenderMismatch,
         MissingRefundTenders,
         ReturnPricingMismatch,
+        ReturnTaxNotPosted,
     ) as exc:
         # RT-16: a return without refundTenders, or priced other than unitPrice x qty, is rejected
         # like an unmapped store — never posted as an outstanding credit note or at a guessed amount.
@@ -654,15 +661,21 @@ def _build_reversal(
     A void takes no tender map (its Modes of Payment come from the original invoice, RT-78); a
     return pays its refund out through the CURRENT map (a new cash payout, RT-10 D6).
     """
-    resolvers = {
-        "uom_for": uom_map.resolve,
-        "warehouse_for": warehouses.for_store,
-        "customer_for": customers.for_store,
-        "posting_stamp": stamp,
-    }
     if work_item.reversal_of is not None and work_item.reversal_of.reversal_kind == "return":
-        return build_return_invoice(work_item, mode_of_payment_for=tenders.resolve, **resolvers)
-    return build_reversing_invoice(work_item, **resolvers)
+        resolvers = ReturnResolvers(
+            uom_for=uom_map.resolve,
+            warehouse_for=warehouses.for_store,
+            customer_for=customers.for_store,
+            mode_of_payment_for=tenders.resolve,
+        )
+        return build_return_invoice(work_item, resolvers, posting_stamp=stamp)
+    return build_reversing_invoice(
+        work_item,
+        uom_for=uom_map.resolve,
+        warehouse_for=warehouses.for_store,
+        customer_for=customers.for_store,
+        posting_stamp=stamp,
+    )
 
 
 def _link_to_original(kind: str, doc_payload: dict, original: dict) -> dict:

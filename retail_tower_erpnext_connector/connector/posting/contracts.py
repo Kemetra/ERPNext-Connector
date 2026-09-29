@@ -388,6 +388,12 @@ class Sale:
         raw_lines = wire["lines"]
         if not raw_lines:
             raise ValueError("Sale.lines must carry at least one line (012 minItems: 1)")
+        lines = tuple(SaleLine.from_wire(line) for line in raw_lines)  # type: ignore[union-attr]
+        refs = [line.line_ref for line in lines if line.line_ref is not None]
+        if len(set(refs)) != len(refs):
+            # lineRef = sale_lines.id (unique per sale). A duplicate would post two invoice rows with
+            # one rt_line_ref and make every later return of that line unmatchable (PR #50 review).
+            raise ValueError(f"Sale.lines carries a duplicate lineRef: {refs}")
         return cls(
             sale_ref=str(wire["saleRef"]),
             store_id=str(wire["storeId"]),
@@ -397,7 +403,7 @@ class Sale:
             business_date=str(wire["businessDate"]),
             source_system=str(wire["sourceSystem"]),
             external_id=str(wire["externalId"]),
-            lines=tuple(SaleLine.from_wire(line) for line in raw_lines),  # type: ignore[union-attr]
+            lines=lines,
             tenders=_parse_tenders(wire.get("tenders")),
         )
 
