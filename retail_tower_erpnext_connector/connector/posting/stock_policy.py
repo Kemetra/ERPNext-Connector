@@ -15,6 +15,10 @@ Owner decisions (RT-47 comment 10287; RT-48 comment 10291):
     gets an accounting-only credit note — never a fabricated stock restoration; ERPNext also refuses
     ``update_stock=1`` against a non-stock original) and references each original line via
     ``sales_invoice_item`` so ERPNext's per-line over-return cap (``StockOverReturnError``) applies.
+  - **RT-80 — a full void reverses the original's rounding too.** The return also MIRRORS the
+    original's ``disable_rounded_total``. A sale posted before RT-80 was rounded (10.49 -> AR 10.00
+    + Round Off 0.49); an unrounded -10.49 void of it would leave a -0.49 customer credit and never
+    reverse the Round Off. Mirroring makes the void net to exactly zero in both cases.
 
 The frappe glue only READS the Item flags / original invoice rows and calls these functions.
 This module imports NO frappe and never mutates its inputs.
@@ -78,11 +82,13 @@ def link_void_to_original(
 	doc: Mapping[str, object],
 	*,
 	original_update_stock: int,
+	original_disable_rounded_total: int,
 	original_items: Sequence[Mapping[str, object]],
 ) -> dict:
 	"""Return a copy of the void return ``doc`` mirrored onto and linked to its original invoice.
 
 	- ``update_stock`` := the original's (never restore stock the sale did not move).
+	- ``disable_rounded_total`` := the original's (RT-80: reverse exactly what the sale posted).
 	- each return line is paired with the original row at the same position (rows ordered by
 	  ``idx``; DP2 emits sale and reversal lines in the same ``ORDER BY sale_lines.id``), checked
 	  for ``item_code`` and exact quantity (:func:`_check_pair`), then gets ``sales_invoice_item``
@@ -99,6 +105,7 @@ def link_void_to_original(
 	for pos, (line, row) in enumerate(zip(lines, rows, strict=True), start=1):
 		_link_line(pos, line, row)
 	out["update_stock"] = 1 if int(original_update_stock or 0) else 0
+	out["disable_rounded_total"] = 1 if int(original_disable_rounded_total or 0) else 0
 	return out
 
 
