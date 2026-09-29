@@ -265,3 +265,54 @@ class TestSaleTenders:
     def test_tenders_must_be_a_list(self):
         with pytest.raises(ValueError, match="tenders"):
             c.PostingWorkItem.from_wire(self._with_tenders({"method": "cash", "amount": "1.00"}))
+
+
+
+class TestReversalTimestamps:
+    """RT-16 / RT-63 (decision 10348): ``reversalOf.recordedAt`` + ``reversalOf.businessDate``.
+
+    Both optional on parse (an older Backend-Core sends neither → the RT-49 fallback). When sent they
+    must be well-formed, and a ``void`` / ``return`` that carries ``recordedAt`` must carry its own
+    ``businessDate`` (posting-feed 1.3 schema) — a legacy ``refund`` has none (RT-63 P2).
+    """
+
+    def _reversal(self, **ref):
+        wire = _wire_work_item()
+        wire["kind"] = "reversal"
+        wire["reversalOf"] = {"sourceSystem": "pos-pulse", "externalId": "POS-9001", "reversalKind": "void", **ref}
+        return wire
+
+    def test_parses_the_reversal_own_time_and_business_date(self):
+        wi = c.PostingWorkItem.from_wire(
+            self._reversal(recordedAt="2026-06-05T09:30:00Z", businessDate="2026-06-05")
+        )
+        assert (wi.reversal_of.recorded_at, wi.reversal_of.business_date) == (
+            "2026-06-05T09:30:00Z",
+            "2026-06-05",
+        )
+
+    def test_older_backend_core_sends_neither(self):
+        wi = c.PostingWorkItem.from_wire(self._reversal())
+        assert (wi.reversal_of.recorded_at, wi.reversal_of.business_date) == (None, None)
+
+    def test_void_with_a_time_but_no_business_date_is_malformed(self):
+        with pytest.raises(ValueError, match="businessDate"):
+            c.PostingWorkItem.from_wire(self._reversal(recordedAt="2026-06-05T09:30:00Z"))
+
+    def test_legacy_refund_carries_a_time_without_a_business_date(self):
+        wi = c.PostingWorkItem.from_wire(
+            self._reversal(reversalKind="refund", recordedAt="2026-06-05T09:30:00Z")
+        )
+        assert (wi.reversal_of.recorded_at, wi.reversal_of.business_date) == ("2026-06-05T09:30:00Z", None)
+
+    @pytest.mark.parametrize("recorded_at", ["yesterday", "2026-06-05", 1717580000, ""])
+    def test_malformed_recorded_at_raises(self, recorded_at):
+        with pytest.raises(ValueError, match="recordedAt"):
+            c.PostingWorkItem.from_wire(self._reversal(recordedAt=recorded_at, businessDate="2026-06-05"))
+
+    @pytest.mark.parametrize("business_date", ["2026-13-01", "05/06/2026", 20260605, ""])
+    def test_malformed_business_date_raises(self, business_date):
+        with pytest.raises(ValueError, match="businessDate"):
+            c.PostingWorkItem.from_wire(
+                self._reversal(recordedAt="2026-06-05T09:30:00Z", businessDate=business_date)
+            )
