@@ -179,6 +179,26 @@ sets the site up **in ERPNext Desk**. Retail Tower does not load stock or change
        the terminal. Do **not** change a timezone, because they may already match.
      - `raised_to_original`: expected only for invoices posted before RT-49.
 
+8. **Map every tender method to a Mode of Payment that has a company account (RT-78).** A sale
+   that carries tenders posts as one **Paid** Sales Invoice (`is_pos = 1`, one payment row per
+   tender, no Payment Entry). RT-10 D3(b)/D5, amendment 011-DR-POSTING-A1.
+   - In Connector Settings → *Tender → Mode of Payment Map*, add one row per method Backend-Core
+     sends: `cash` and `card_external`. There is no default. A sale whose method has no row is
+     rejected as `validation`, and nothing posts.
+   - Each mapped Mode of Payment needs a **default account for the company** (Mode of Payment →
+     *Accounts*). The card clearing account is finance configuration. A missing account makes
+     ERPNext reject the invoice as `validation`.
+   - The map may stay empty while every sale is tender-unknown. Those sales post unpaid, as
+     before.
+   - **Rollout order:** deploy this Connector version **before** Backend-Core starts accepting
+     tenders (RT-77) or the POS starts sending them (RT-79). An older Connector would post a
+     tendered sale unpaid, and that outcome is final.
+   - A sale is rejected as `validation` when its tender total differs from its line total, or when
+     ERPNext's computed totals leave change, a write-off or an outstanding amount. The invoice is
+     rolled back, nothing is submitted, and it is a reconciliation case.
+   - A void pays back the original invoice's own payment rows (same Modes of Payment and amounts).
+     It is rejected if its tenders disagree with how the original was paid.
+
 Returns: a full void restores stock only if the original invoice moved it. Invoices posted
 before this change (`update_stock=0`) get an accounting-only credit note. Refunds never move
 stock until line-aware refunds land (RT-14/RT-16).
