@@ -318,6 +318,21 @@ class TestReversalTimestamps:
         with pytest.raises(ValueError, match="offset"):
             c.PostingWorkItem.from_wire(self._reversal(recordedAt=recorded_at, businessDate="2026-06-05"))
 
+    @pytest.mark.parametrize(
+        "recorded_at",
+        ["2026-06-05T09:30+03:00", "2026-06-05T09Z", "2026-06-05 09:30:00Z", "20260605T093000Z"],
+    )
+    def test_recorded_at_must_follow_the_rfc3339_grammar(self, recorded_at):
+        # Codex P2 PR #49 round 2: fromisoformat also accepts non-RFC 3339 forms (no seconds, a
+        # space separator, basic format), which could then post at a guessed time.
+        with pytest.raises(ValueError, match="RFC 3339"):
+            c.PostingWorkItem.from_wire(self._reversal(recordedAt=recorded_at, businessDate="2026-06-05"))
+
+    @pytest.mark.parametrize("recorded_at", ["2026-06-05T09:30:00.123Z", "2026-06-05T09:30:00.123456+03:00"])
+    def test_recorded_at_with_fractional_seconds_is_accepted(self, recorded_at):
+        wi = c.PostingWorkItem.from_wire(self._reversal(recordedAt=recorded_at, businessDate="2026-06-05"))
+        assert wi.reversal_of.recorded_at == recorded_at
+
     def test_recorded_at_with_an_explicit_offset_is_accepted(self):
         wi = c.PostingWorkItem.from_wire(
             self._reversal(recordedAt="2026-06-05T12:30:00+03:00", businessDate="2026-06-05")
