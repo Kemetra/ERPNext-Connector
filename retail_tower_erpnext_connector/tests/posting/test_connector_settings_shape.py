@@ -111,12 +111,13 @@ _TENDER_ROW_JSON = (
 )
 
 
+@pytest.fixture(scope="module")
+def row() -> dict:
+    return json.loads(_TENDER_ROW_JSON.read_text(encoding="utf-8"))
+
+
 class TestTenderModeMap:
     """RT-78 / RT-10 D5: the tender_method → Mode of Payment map (authorized gated DocType change)."""
-
-    @pytest.fixture(scope="class")
-    def row(self) -> dict:
-        return json.loads(_TENDER_ROW_JSON.read_text(encoding="utf-8"))
 
     def test_settings_carry_the_tender_map_table(self, fields_by_name: dict[str, dict]):
         f = fields_by_name["tender_mode_map"]

@@ -78,6 +78,24 @@ def parse_store_customer_map(rows: Iterable | None) -> dict[str, str]:
     return _parse_pairs(rows, "store_id", "customer", "store→customer map")
 
 
+def parse_tender_mode_map(rows: Iterable | None) -> dict[str, str]:
+    """Child rows ``{tender_method, mode_of_payment}`` → ``{method: Mode of Payment}`` (RT-78, RT-10 D5).
+
+    Not a REQUIRED map (see :func:`require_configured_maps`): while sales are tender-unknown an
+    empty map is legitimate, and a tender-bearing sale then fails closed per item. A method outside
+    the posting-feed enum is a config error (the Select field should have prevented it) — fail loud.
+    """
+    from .contracts import TENDER_METHODS
+
+    pairs = _parse_pairs(rows, "tender_method", "mode_of_payment", "tender map")
+    unknown = sorted(set(pairs) - TENDER_METHODS)
+    if unknown:
+        raise ConfigError(
+            f"tender map has unknown tender_method(s) {unknown} — allowed: {sorted(TENDER_METHODS)}"
+        )
+    return pairs
+
+
 def require_configured_maps(
     *, uom: Mapping, warehouse: Mapping, customer: Mapping
 ) -> None:

@@ -1,0 +1,42 @@
+{
+ "actions": [],
+ "creation": "2026-09-29 00:00:00.000000",
+ "description": "One tender-method to Mode of Payment mapping row for Connector Settings (RT-78, RT-10 D5). A POS sale carrying tenders posts as a paid Sales Invoice with one payment per tender; each tender method is mapped here to an ERPNext Mode of Payment, which must have a company account (finance configuration). Consumed by connector.posting.config.parse_tender_mode_map (fieldnames tender_method/mode_of_payment must match the parser). An unmapped method fails closed (UnmappedTender -> validation): the connector never guesses a payment mode.",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "tender_method",
+  "mode_of_payment"
+ ],
+ "fields": [
+  {
+   "fieldname": "tender_method",
+   "fieldtype": "Select",
+   "options": "cash\ncard_external",
+   "label": "Tender Method",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "The posting-feed SaleTender.method (RT-10 D2 pilot methods). Vouchers are excluded."
+  },
+  {
+   "fieldname": "mode_of_payment",
+   "fieldtype": "Link",
+   "options": "Mode of Payment",
+   "label": "ERPNext Mode of Payment",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "The ERPNext Mode of Payment this tender settles through. It must have a default account for the company."
+  }
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-09-29 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Connector",
+ "name": "RT Tender Mode Map Row",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
