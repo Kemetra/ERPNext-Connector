@@ -393,12 +393,14 @@ def _post_reversal(
     # line semantics belong to RT-14/RT-16). Any line mismatch fails closed.
     if work_item.reversal_of is not None and work_item.reversal_of.reversal_kind == "void":
         try:
-            original_update_stock, original_rounding, original_rows = _read_original_invoice(original_name)
+            original = _read_original_invoice(original_name)
             doc_payload = link_void_to_original(
                 doc_payload,
-                original_update_stock=original_update_stock,
-                original_disable_rounded_total=original_rounding,
-                original_items=original_rows,
+                original_update_stock=original["update_stock"],
+                original_disable_rounded_total=original["disable_rounded_total"],
+                original_items=original["items"],
+                original_is_pos=original["is_pos"],
+                original_payments=original["payments"],
             )
         except ReturnLineMismatch as exc:
             return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
@@ -604,14 +606,17 @@ def _log_stamp_adjustments(stamp: PostingStamp, work_item: PostingWorkItem, corr
     )
 
 
-def _read_original_invoice(name: str) -> tuple[int, int, list[dict]]:
-    """Read the original SI's ``update_stock``, ``disable_rounded_total`` (RT-80) and its item rows
+def _read_original_invoice(name: str) -> dict:
+    """Read what a full void mirrors from the original SI (``stock_policy.link_void_to_original``).
+
+    ``update_stock`` (RT-48), ``disable_rounded_total`` (RT-80), ``is_pos`` and its payment rows
+    ``(mode_of_payment, amount, idx)`` (RT-78), and its item rows
     ``(name, item_code, qty, idx, warehouse)`` (RT-48).
 
-    ⏳ BENCH-VALIDATION. Feeds the pure ``stock_policy.link_void_to_original``.
+    ⏳ BENCH-VALIDATION.
     """
     flags = frappe.db.get_value(
-        "Sales Invoice", name, ["update_stock", "disable_rounded_total"], as_dict=True
+        "Sales Invoice", name, ["update_stock", "disable_rounded_total", "is_pos"], as_dict=True
     ) or {}
     rows = frappe.get_all(
         "Sales Invoice Item",
@@ -619,11 +624,19 @@ def _read_original_invoice(name: str) -> tuple[int, int, list[dict]]:
         fields=["name", "item_code", "qty", "idx", "warehouse"],
         order_by="idx asc",
     )
-    return (
-        int(flags.get("update_stock") or 0),
-        int(flags.get("disable_rounded_total") or 0),
-        [dict(row) for row in rows],
+    payments = frappe.get_all(
+        "Sales Invoice Payment",
+        filters={"parent": name, "parenttype": "Sales Invoice"},
+        fields=["mode_of_payment", "amount", "idx"],
+        order_by="idx asc",
     )
+    return {
+        "update_stock": int(flags.get("update_stock") or 0),
+        "disable_rounded_total": int(flags.get("disable_rounded_total") or 0),
+        "is_pos": int(flags.get("is_pos") or 0),
+        "items": [dict(row) for row in rows],
+        "payments": [dict(row) for row in payments],
+    }
 
 
 def _reject(

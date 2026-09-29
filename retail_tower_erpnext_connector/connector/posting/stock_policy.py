@@ -19,6 +19,12 @@ Owner decisions (RT-47 comment 10287; RT-48 comment 10291):
     original's ``disable_rounded_total``. A sale posted before RT-80 was rounded (10.49 -> AR 10.00
     + Round Off 0.49); an unrounded -10.49 void of it would leave a -0.49 customer credit and never
     reverse the Round Off. Mirroring makes the void net to exactly zero in both cases.
+  - **RT-78 / RT-10 D6 — a full void pays back exactly what the original was paid with.** The
+    void's payments are rebuilt from the ORIGINAL invoice's own payment rows (Mode of Payment and
+    amount as booked), so a tender map remapped since the sale cannot refund through a different
+    mode. The void's ``sale.tenders`` (already negated onto ``doc`` by the reversal builder) only
+    cross-check it: a paid void of an unpaid original, an unpaid void of a paid original, or a
+    different total fails closed (:class:`VoidSettlementMismatch`).
 
 The frappe glue only READS the Item flags / original invoice rows and calls these functions.
 This module imports NO frappe and never mutates its inputs.
@@ -44,6 +50,14 @@ class UnsupportedTrackedItem(Exception):
 
 class ReturnLineMismatch(Exception):
 	"""A void's lines do not line up 1:1 with the original invoice rows (fail-closed)."""
+
+
+class VoidSettlementMismatch(ReturnLineMismatch):
+	"""A void's tenders disagree with how the original invoice was settled (RT-78 fail-closed).
+
+	A subclass of :class:`ReturnLineMismatch` so the glue's existing mapping (→ ``validation``)
+	covers it: the void is rejected and nothing is posted.
+	"""
 
 
 def tracking_item_codes(doc: Mapping[str, object]) -> list[str]:
@@ -84,11 +98,15 @@ def link_void_to_original(
 	original_update_stock: int,
 	original_disable_rounded_total: int,
 	original_items: Sequence[Mapping[str, object]],
+	original_is_pos: int,
+	original_payments: Sequence[Mapping[str, object]],
 ) -> dict:
 	"""Return a copy of the void return ``doc`` mirrored onto and linked to its original invoice.
 
 	- ``update_stock`` := the original's (never restore stock the sale did not move).
 	- ``disable_rounded_total`` := the original's (RT-80: reverse exactly what the sale posted).
+	- ``payments`` := the original's payment rows, negated (RT-78), after the cross-check in
+	  :func:`_mirror_settlement`; a void of an unpaid original carries none.
 	- each return line is paired with the original row at the same position (rows ordered by
 	  ``idx``; DP2 emits sale and reversal lines in the same ``ORDER BY sale_lines.id``), checked
 	  for ``item_code`` and exact quantity (:func:`_check_pair`), then gets ``sales_invoice_item``
@@ -106,7 +124,42 @@ def link_void_to_original(
 		_link_line(pos, line, row)
 	out["update_stock"] = 1 if int(original_update_stock or 0) else 0
 	out["disable_rounded_total"] = 1 if int(original_disable_rounded_total or 0) else 0
+	_mirror_settlement(out, original_is_pos=original_is_pos, original_payments=original_payments)
 	return out
+
+
+def _mirror_settlement(
+	out: dict, *, original_is_pos: int, original_payments: Sequence[Mapping[str, object]]
+) -> None:
+	"""Replace the void's tender-built payments with the original's rows, negated (fail closed).
+
+	All amounts are compared and copied as :class:`Decimal` built from their string form (the DB
+	amount is a float), never float arithmetic.
+	"""
+	void_payments = out.get("payments") or []
+	if not int(original_is_pos or 0):
+		if void_payments:
+			raise VoidSettlementMismatch(
+				"void carries tenders but the original invoice is unpaid (not is_pos) — refusing to pay "
+				"cash out against a sale ERPNext never recorded as paid"
+			)
+		return
+	if not void_payments:
+		raise VoidSettlementMismatch(
+			"the original invoice is paid (is_pos) but the void carries no tenders — ERPNext would "
+			"leave the refund as a customer credit instead of paying it back"
+		)
+	rows = sorted(original_payments, key=lambda r: int(r.get("idx") or 0))  # type: ignore[arg-type]
+	paid = sum((Decimal(str(r["amount"])) for r in rows), Decimal(0))
+	refunded = -sum((Decimal(str(p["amount"])) for p in void_payments), Decimal(0))
+	if paid != refunded:
+		raise VoidSettlementMismatch(
+			f"void tender total {refunded} != original invoice payment total {paid}"
+		)
+	out["is_pos"] = 1
+	out["payments"] = [
+		{"mode_of_payment": r["mode_of_payment"], "amount": str(-Decimal(str(r["amount"])))} for r in rows
+	]
 
 
 def _rows_in_line_order(lines: Sequence[object], original_items: Sequence[Mapping[str, object]]) -> list:
