@@ -416,6 +416,23 @@ class TestStockEffectByReversalKind:
 		assert doc["is_return"] == 1
 
 
+
+class TestNoRounding:
+	"""RT-80: a credit note inherits the forward builder's ``disable_rounded_total=1``.
+
+	Otherwise a fractional void/return would round its negative total exactly as the sale did, and
+	the credit note would not equal the reversed amount.
+	"""
+
+	def test_refund_credit_note_disables_rounded_total(self):
+		doc = _build()  # the default fixture is reversalKind=refund
+		assert doc["disable_rounded_total"] == 1
+
+	def test_void_return_invoice_disables_rounded_total(self):
+		doc = _build(_void_work_item())
+		assert doc["disable_rounded_total"] == 1
+
+
 class TestPostingTime:
 	"""RT-49 (decision 10312): a reversal keeps its businessDate via set_posting_time=1."""
 

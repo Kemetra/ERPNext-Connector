@@ -72,10 +72,11 @@ def _original_rows():
 	]
 
 
-def _link(doc=None, *, original_update_stock=1, original_items=None):
+def _link(doc=None, *, original_update_stock=1, original_disable_rounded_total=1, original_items=None):
 	return sp.link_void_to_original(
 		doc or _doc(is_return=1),
 		original_update_stock=original_update_stock,
+		original_disable_rounded_total=original_disable_rounded_total,
 		original_items=_original_rows() if original_items is None else original_items,
 	)
 
@@ -86,6 +87,20 @@ class TestVoidLinkage:
 
 	def test_legacy_original_never_fabricates_stock_restoration(self):
 		assert _link(original_update_stock=0)["update_stock"] == 0
+
+	def test_mirrors_an_unrounded_original(self):
+		# RT-80: a sale posted with the fix carries disable_rounded_total=1; its void does too.
+		assert _link(original_disable_rounded_total=1)[
+			"disable_rounded_total"
+		] == 1
+
+	def test_legacy_rounded_original_is_reversed_with_its_own_rounding(self):
+		# RT-80 (Codex P2, PR #47): a pre-fix sale posted 10.49 as AR 10.00 + Round Off 0.49. An
+		# unrounded -10.49 void would leave a -0.49 customer credit and never reverse the Round Off
+		# (rt9 bench T4). Mirroring the original's rounding makes the void net to exactly zero.
+		assert _link(original_disable_rounded_total=0)[
+			"disable_rounded_total"
+		] == 0
 
 	def test_each_line_references_its_original_row_by_position(self):
 		doc = _link()

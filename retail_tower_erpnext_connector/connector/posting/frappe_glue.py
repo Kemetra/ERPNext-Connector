@@ -387,15 +387,17 @@ def _post_reversal(
     _log_stamp_adjustments(stamp, work_item, correlation_id)
 
     # RT-48 / RT-47 D5 — a full void mirrors the original's update_stock (a legacy update_stock=0
-    # sale never fabricates a stock restoration) and links each line to its original row so
+    # sale never fabricates a stock restoration) and, RT-80, its disable_rounded_total (a pre-RT-80
+    # rounded sale is reversed with its own Round Off), and links each line to its original row so
     # ERPNext's per-line over-return cap applies. A refund stays update_stock=0 and unlinked (its
     # line semantics belong to RT-14/RT-16). Any line mismatch fails closed.
     if work_item.reversal_of is not None and work_item.reversal_of.reversal_kind == "void":
         try:
-            original_update_stock, original_rows = _read_original_invoice(original_name)
+            original_update_stock, original_rounding, original_rows = _read_original_invoice(original_name)
             doc_payload = link_void_to_original(
                 doc_payload,
                 original_update_stock=original_update_stock,
+                original_disable_rounded_total=original_rounding,
                 original_items=original_rows,
             )
         except ReturnLineMismatch as exc:
@@ -602,19 +604,26 @@ def _log_stamp_adjustments(stamp: PostingStamp, work_item: PostingWorkItem, corr
     )
 
 
-def _read_original_invoice(name: str) -> tuple[int, list[dict]]:
-    """Read the original SI's ``update_stock`` and its item rows ``(name, item_code, qty, idx, warehouse)`` (RT-48).
+def _read_original_invoice(name: str) -> tuple[int, int, list[dict]]:
+    """Read the original SI's ``update_stock``, ``disable_rounded_total`` (RT-80) and its item rows
+    ``(name, item_code, qty, idx, warehouse)`` (RT-48).
 
     ⏳ BENCH-VALIDATION. Feeds the pure ``stock_policy.link_void_to_original``.
     """
-    update_stock = frappe.db.get_value("Sales Invoice", name, "update_stock")
+    flags = frappe.db.get_value(
+        "Sales Invoice", name, ["update_stock", "disable_rounded_total"], as_dict=True
+    ) or {}
     rows = frappe.get_all(
         "Sales Invoice Item",
         filters={"parent": name, "parenttype": "Sales Invoice"},
         fields=["name", "item_code", "qty", "idx", "warehouse"],
         order_by="idx asc",
     )
-    return int(update_stock or 0), [dict(row) for row in rows]
+    return (
+        int(flags.get("update_stock") or 0),
+        int(flags.get("disable_rounded_total") or 0),
+        [dict(row) for row in rows],
+    )
 
 
 def _reject(

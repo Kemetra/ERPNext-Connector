@@ -269,6 +269,23 @@ class TestStockEffect:
         assert all(item["warehouse"] == "Main - RT" for item in doc["items"])
 
 
+
+class TestNoRounding:
+    """RT-80 (F-R1, bench RT-75 T6a/T6b): ERPNext must not round a fractional POS total.
+
+    With the site default (Global Defaults ``disable_rounded_total=0``) a 10.49 EGP sale posts
+    ``rounded_total`` 10.00 and AR outstanding 10.00, with 0.49 booked to Round Off, so ERPNext AR
+    no longer reconciles to DP2 ``posTotal``. The builder sets the flag per document instead of
+    relying on a site setting (Principle VI: the posted total is the POS total, exactly).
+    """
+
+    def test_sale_invoice_disables_rounded_total(self):
+        doc = b.build_sales_invoice(
+            _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+        )
+        assert doc["disable_rounded_total"] == 1
+
+
 class TestPostingTime:
     """RT-49 (decision 10312): ERPNext overwrites posting_date unless set_posting_time=1."""
 

@@ -18,6 +18,9 @@ document payload the connector will submit. It:
     stock-moving document. ERPNext writes the Stock Ledger Entries inside the SAME submit, so the
     existing SI idempotency (Posting Log + ``unique_rt_si_provenance``) is also the stock
     exactly-once guarantee. No Delivery Note.
+  - sets ``disable_rounded_total = 1`` (RT-80): the site default rounds a fractional total to the
+    whole unit (10.49 EGP -> AR 10.00 + 0.49 Round Off), so AR would no longer equal ``posTotal``.
+    The reversal builder composes on this one, so credit notes inherit it.
 
 This module imports NO frappe — it builds a plain dict the bench glue submits. The interim
 mode posts a submitted Sales Invoice only (outstanding AR; rider R1) — no Payment Entry here.
@@ -98,6 +101,9 @@ def build_sales_invoice(
         "rt_sale_ref": sale.sale_ref,
         # RT-48 / RT-47 D1: the sale moves stock out of each line's mapped store warehouse.
         "update_stock": 1,
+        # RT-80: post the exact POS total. ERPNext otherwise applies the site default
+        # (Global Defaults disable_rounded_total=0) and rounds 10.49 to 10.00 + Round Off.
+        "disable_rounded_total": 1,
         "items": items,
     }
 
