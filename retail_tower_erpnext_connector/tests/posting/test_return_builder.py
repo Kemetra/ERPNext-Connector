@@ -36,7 +36,7 @@ def _line(ref, name, item, qty, price, amount):
 
 
 def _return(return_lines=None, refund_tenders=None, sale_tenders=None, *, drop_refund=False):
-	"""A two-line sale (A: 3 × 100.00, B: 1 × 50.00) and a return of part of it."""
+	"""A two-line sale (A: 3 x 100.00, B: 1 x 50.00) and a return of part of it."""
 	ref = {
 		"sourceSystem": "pos-pulse",
 		"externalId": "POS-9001",
@@ -201,10 +201,10 @@ class TestRefundPayout:
 
 class TestPricing:
 	def test_line_amount_must_equal_unit_price_times_returned_quantity(self):
-		# ERPNext recomputes amount = rate × qty; a return priced otherwise would post a different
+		# ERPNext recomputes amount = rate x qty; a return priced otherwise would post a different
 		# amount than Backend-Core recorded, so it fails closed instead.
 		lines = [{"lineRef": _A, "quantity": "1", "lineAmount": "99.99", "taxAmount": None}]
-		with pytest.raises(rtb.ReturnPricingMismatch, match="99.99"):
+		with pytest.raises(rtb.ReturnPricingMismatch, match=r"99.99"):
 			_build(_return(return_lines=lines, refund_tenders=[{"method": "cash", "amount": "99.99"}]))
 
 
