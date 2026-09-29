@@ -251,9 +251,9 @@ def _original_with_refs():
 	# The ORIGINAL invoice's rows only (the glue filters by parent): qty is a DB float.
 	return [
 		{"name": "row-a", "item_code": "ITEM-A", "qty": 3.0, "idx": 1, "warehouse": "Stores - A", "rt_line_ref": _A,
-			"uom": "Box"},
+			"uom": "Box", "conversion_factor": 12.0},
 		{"name": "row-b", "item_code": "ITEM-B", "qty": 1.0, "idx": 2, "warehouse": "Stores - B", "rt_line_ref": _B,
-			"uom": "Nos"},
+			"uom": "Nos", "conversion_factor": 1.0},
 	]
 
 
@@ -289,6 +289,12 @@ class TestReturnLinkage:
 		# Codex P2 PR #50: a unit->UOM map changed since the sale must not change what qty means.
 		doc = _link_return(_return_doc((_B, "ITEM-B", "-1"), (_A, "ITEM-A", "-1")))
 		assert [i["uom"] for i in doc["items"]] == ["Nos", "Box"]
+
+	def test_returns_with_the_original_row_conversion_factor(self):
+		# Codex P2 PR #50 round 3: an Item's UOM factor changed since the sale must not change how
+		# many stock units the return restores.
+		doc = _link_return(_return_doc((_A, "ITEM-A", "-1")))
+		assert (doc["items"][0]["uom"], doc["items"][0]["conversion_factor"]) == ("Box", 12.0)
 
 	def test_mirrors_the_original_update_stock(self):
 		assert _link_return(_return_doc((_A, "ITEM-A", "-1")), original_update_stock=0)["update_stock"] == 0
