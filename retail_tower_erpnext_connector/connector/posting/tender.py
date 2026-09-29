@@ -80,13 +80,26 @@ def build_payments(
     """
     if not tenders:
         return []
-    if mode_of_payment_for is None:
-        raise UnmappedTender(tenders[0].method)
-    tender_total = sum((Decimal(t.amount) for t in tenders), Decimal(0))
-    line_total = sum((Decimal(a) for a in line_amounts), Decimal(0))
+    _assert_tenders_cover_lines(tenders, line_amounts)
+    resolve = mode_of_payment_for or _unwired
+    return [{"mode_of_payment": resolve(t.method), "amount": t.amount} for t in tenders]
+
+
+def _decimal_sum(amounts: Sequence[str]) -> Decimal:
+    return sum((Decimal(a) for a in amounts), Decimal(0))
+
+
+def _assert_tenders_cover_lines(tenders: Sequence[SaleTender], line_amounts: Sequence[str]) -> None:
+    """Raise :class:`TenderMismatch` unless ``Σ tenders == Σ line_amounts`` exactly (amendment 4a)."""
+    tender_total = _decimal_sum([t.amount for t in tenders])
+    line_total = _decimal_sum(line_amounts)
     if tender_total != line_total:
         raise TenderMismatch(tender_total, line_total)
-    return [{"mode_of_payment": mode_of_payment_for(t.method), "amount": t.amount} for t in tenders]
+
+
+def _unwired(method: str) -> str:
+    """No tender resolver was wired: a tender-bearing sale fails closed, never posts unpaid."""
+    raise UnmappedTender(method)
 
 
 class SettlementDrift(Exception):

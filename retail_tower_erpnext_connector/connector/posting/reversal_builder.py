@@ -73,6 +73,15 @@ def _negate(amount: str) -> str:
 	return f"-{amount}"
 
 
+def _mode_from_original(method: str) -> None:
+	"""A void's Mode of Payment is filled from the ORIGINAL invoice's payment rows in the glue.
+
+	Left ``None`` here on purpose: if that mirror step were ever skipped, ERPNext rejects the row
+	(Mode of Payment is mandatory) instead of refunding through a guessed or current mode.
+	"""
+	return None
+
+
 def build_reversing_invoice(
 	work_item: PostingWorkItem,
 	*,
@@ -80,7 +89,6 @@ def build_reversing_invoice(
 	warehouse_for: Callable[[str], dict],
 	customer_for: Callable[[str], str],
 	posting_stamp: PostingStamp | None = None,
-	mode_of_payment_for: Callable[[str], str] | None = None,
 ) -> dict:
 	"""Build the ERPNext return Sales-Invoice (credit note) payload for one ``reversal`` work-item.
 
@@ -89,10 +97,12 @@ def build_reversing_invoice(
 	negated. Raises :class:`ValueError` if handed a non-reversal work-item (it would mis-post).
 	``posting_stamp`` is the RT-49 posting date/time (glue: site clock); without one it is derived
 	from ``sale.occurredAt`` and the reversal's ``business_date`` in UTC.
-	RT-78 / RT-10 D6: a ``void`` refunds by mirroring ``sale.tenders`` as NEGATIVE payments
-	(``mode_of_payment_for`` resolves them); a void of a tender-unknown sale stays an outstanding
-	credit note. Any other kind never mirrors the sale's tenders (a return pays out its own
-	``refundTenders`` — RT-16).
+	RT-78 / RT-10 D6: a ``void`` refunds by mirroring ``sale.tenders`` as NEGATIVE payment amounts;
+	a void of a tender-unknown sale stays an outstanding credit note. The rows carry NO Mode of
+	Payment here: the glue fills each one from the ORIGINAL invoice's own payment rows
+	(``stock_policy.link_void_to_original``), so a tender map changed since the sale can neither
+	block nor redirect the refund (Codex P2, PR #48). Any other kind never mirrors the sale's
+	tenders (a return pays out its own ``refundTenders`` — RT-16).
 	"""
 	if work_item.kind != "reversal":
 		raise ValueError(f"build_reversing_invoice expects a reversal work-item, got kind {work_item.kind!r}")
@@ -112,7 +122,7 @@ def build_reversing_invoice(
 		uom_for=uom_for,
 		warehouse_for=warehouse_for,
 		customer_for=customer_for,
-		mode_of_payment_for=mode_of_payment_for,
+		mode_of_payment_for=_mode_from_original,
 	)
 
 	# A credit note IS a Sales Invoice with is_return=1.

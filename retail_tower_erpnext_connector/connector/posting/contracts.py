@@ -114,6 +114,10 @@ class SaleTender:
 
     @classmethod
     def from_wire(cls, wire: Mapping[str, object]) -> SaleTender:
+        if not isinstance(wire, Mapping):
+            # Greptile PR #48: `.get()` on a scalar raised AttributeError, which the transport does
+            # not isolate, so one bad item aborted the page. ValueError is isolated per item.
+            raise ValueError(f"SaleTender must be an object, got {type(wire).__name__}")
         method = wire.get("method")
         if method not in TENDER_METHODS:
             raise ValueError(f"SaleTender.method must be one of {sorted(TENDER_METHODS)}, got {method!r}")

@@ -145,8 +145,9 @@ def post_work_item(
     """Post one work-item to ERPNext and ack the outcome. Returns the resulting outcome string.
 
     ⏳ BENCH-VALIDATION — exercises live ``frappe`` APIs; validated on staging, not locally.
-    ``tenders`` is the RT-10 D5 tender → Mode of Payment map (RT-78); a sale or void carrying
-    tenders is settled on the invoice, an unmapped method fails closed.
+    ``tenders`` is the RT-10 D5 tender → Mode of Payment map (RT-78): a sale carrying tenders is
+    settled on the invoice and an unmapped method fails closed. A void does not use it — it pays
+    back the original invoice's own payment rows.
     """
     key = key_for(work_item)
 
@@ -172,7 +173,6 @@ def post_work_item(
             uom_map=uom_map,
             warehouses=warehouses,
             customers=customers,
-            tenders=tenders,
             correlation_id=correlation_id,
         )
     if work_item.kind != "sale_post":
@@ -323,7 +323,6 @@ def _post_reversal(
     uom_map: UomMap,
     warehouses: PreResolvedWarehouse,
     customers: StoreCustomerMap,
-    tenders: TenderModeMap,
     correlation_id: str,
 ) -> str:
     """Post one ``reversal`` work-item as a return Sales Invoice (credit note). Returns the outcome.
@@ -367,13 +366,13 @@ def _post_reversal(
     # anything else → other. A final `except Exception` guarantees the terminal-outcome invariant.
     try:
         stamp = _posting_stamp(work_item, work_item.business_date)
+        # RT-78: no tender map here — a void's Modes of Payment come from the original invoice.
         doc_payload = build_reversing_invoice(
             work_item,
             uom_for=uom_map.resolve,
             warehouse_for=warehouses.for_store,
             customer_for=customers.for_store,
             posting_stamp=stamp,
-            mode_of_payment_for=tenders.resolve,
         )
     except UnmappedUnit as exc:
         return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, str(exc))
