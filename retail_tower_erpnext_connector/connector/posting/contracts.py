@@ -42,6 +42,11 @@ TENDER_METHODS: frozenset[str] = frozenset({"cash", "card_external"})
 # 012 NonNegativeDecimalAmount and SaleTender.reference patterns (posting-feed.yaml, verbatim).
 _NON_NEGATIVE_DECIMAL_RE = re.compile(r"^[0-9]{1,15}(\.[0-9]{1,4})?$")
 _TENDER_REFERENCE_RE = re.compile(r"^[A-Z0-9]{1,6}$")
+# RFC 3339 ``date-time`` (full-date "T" full-time with seconds and an offset); fromisoformat alone
+# also accepts forms without seconds or in basic format (Codex P2, PR #49).
+_RFC3339_DATE_TIME_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$"
+)
 
 
 class MissingErpnextItemRef(Exception):
@@ -88,15 +93,16 @@ def _optional_instant(wire: Mapping[str, object], field: str) -> str | None:
     value = wire.get(field)
     if value is None:
         return None
-    if not isinstance(value, str) or "T" not in value:
-        raise ValueError(f"ReversalRef.{field} must be an RFC 3339 date-time string, got {value!r}")
+    if not isinstance(value, str) or not _RFC3339_DATE_TIME_RE.match(value):
+        raise ValueError(
+            f"ReversalRef.{field} must be an RFC 3339 date-time string (seconds and a timezone offset, "
+            f"Z or ±hh:mm), got {value!r}"
+        )
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        # The grammar guarantees an offset; this catches out-of-range values (month 13, hour 25).
+        datetime.fromisoformat(value.upper().replace("Z", "+00:00"))
     except ValueError:
         raise ValueError(f"ReversalRef.{field} is not a valid date-time: {value!r}") from None
-    if parsed.utcoffset() is None:
-        # RFC 3339 requires an offset; a naive time would only fail later, misclassified (PR #49).
-        raise ValueError(f"ReversalRef.{field} must carry a timezone offset (Z or ±hh:mm), got {value!r}")
     return value
 
 
