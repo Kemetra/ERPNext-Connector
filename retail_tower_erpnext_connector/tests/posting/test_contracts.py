@@ -255,6 +255,13 @@ class TestSaleTenders:
                 )
             )
 
+    @pytest.mark.parametrize("element", [None, "cash", 10, ["cash", "1.00"]])
+    def test_non_object_tender_element_raises_value_error(self, element):
+        # Greptile PR #48: `.get()` on a scalar raised AttributeError, which the transport does not
+        # isolate, so one bad item aborted the whole page. It must be a ValueError.
+        with pytest.raises(ValueError, match="object"):
+            c.PostingWorkItem.from_wire(self._with_tenders([element]))
+
     def test_tenders_must_be_a_list(self):
         with pytest.raises(ValueError, match="tenders"):
             c.PostingWorkItem.from_wire(self._with_tenders({"method": "cash", "amount": "1.00"}))
