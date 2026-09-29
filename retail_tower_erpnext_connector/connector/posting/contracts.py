@@ -94,9 +94,23 @@ class ErpnextDocumentRef:
 _DATED_REVERSAL_KINDS: frozenset[str] = frozenset({"void", "return"})
 
 
+def _omitted_or_value(wire: Mapping[str, object], field: str) -> object:
+    """``None`` only when ``field`` is OMITTED; an explicit JSON null is malformed (PR #49 review).
+
+    The schema types these fields as strings: only an older Backend-Core that omits them gets the
+    RT-49 fallback, never a modern payload that sends null (it would silently post on the sale's day).
+    """
+    if field not in wire:
+        return None
+    value = wire[field]
+    if value is None:
+        raise ValueError(f"ReversalRef.{field} must be omitted or a string, not null (RT-63)")
+    return value
+
+
 def _optional_instant(wire: Mapping[str, object], field: str) -> str | None:
     """An optional RFC 3339 ``date-time`` string, validated (never re-formatted)."""
-    value = wire.get(field)
+    value = _omitted_or_value(wire, field)
     if value is None:
         return None
     if not isinstance(value, str) or not _RFC3339_DATE_TIME_RE.match(value):
@@ -114,7 +128,7 @@ def _optional_instant(wire: Mapping[str, object], field: str) -> str | None:
 
 def _optional_date(wire: Mapping[str, object], field: str) -> str | None:
     """An optional ISO ``date`` (YYYY-MM-DD) string, validated."""
-    value = wire.get(field)
+    value = _omitted_or_value(wire, field)
     if value is None:
         return None
     if not isinstance(value, str) or not _CALENDAR_DATE_RE.match(value):
