@@ -193,3 +193,68 @@ class TestOutcomeAndReason:
         assert wire["outcome"] == "posted"
         assert wire["documentRef"] == {"doctype": "Sales Invoice", "name": "ACC-SINV-0001"}
         assert "reason" not in wire or wire["reason"] is None
+
+
+class TestSaleTenders:
+    """RT-78 / RT-10 D1-D4: posting-feed 1.2 ``Sale.tenders`` (``SaleTender``), parsed strictly.
+
+    A malformed tender raises ``ValueError`` so the transport isolates the item as
+    ``malformed_work_item`` → ``permanently_rejected`` / ``validation`` (never a guessed tender).
+    """
+
+    def _with_tenders(self, tenders):
+        wire = _wire_work_item()
+        wire["sale"]["tenders"] = tenders
+        return wire
+
+    def test_absent_tenders_is_tender_unknown(self):
+        wi = c.PostingWorkItem.from_wire(_wire_work_item())
+        assert wi.sale.tenders == ()
+
+    def test_null_or_empty_tenders_is_tender_unknown(self):
+        for value in (None, []):
+            wi = c.PostingWorkItem.from_wire(self._with_tenders(value))
+            assert wi.sale.tenders == ()
+
+    def test_parses_cash_and_card_in_wire_order(self):
+        wi = c.PostingWorkItem.from_wire(
+            self._with_tenders(
+                [
+                    {"method": "cash", "amount": "15.00"},
+                    {"method": "card_external", "amount": "5.00", "reference": "AB12C"},
+                ]
+            )
+        )
+        assert wi.sale.tenders == (
+            c.SaleTender(method="cash", amount="15.00", reference=None),
+            c.SaleTender(method="card_external", amount="5.00", reference="AB12C"),
+        )
+
+    @pytest.mark.parametrize("method", ["voucher", "CASH", "card", ""])
+    def test_unknown_method_raises(self, method):
+        with pytest.raises(ValueError, match="method"):
+            c.PostingWorkItem.from_wire(self._with_tenders([{"method": method, "amount": "1.00"}]))
+
+    @pytest.mark.parametrize("amount", [1.5, "-1.00", "1.12345", "abc", "", None])
+    def test_amount_must_be_a_non_negative_exact_decimal_string(self, amount):
+        with pytest.raises(ValueError, match="amount"):
+            c.PostingWorkItem.from_wire(self._with_tenders([{"method": "cash", "amount": amount}]))
+
+    def test_cash_must_not_carry_a_reference(self):
+        with pytest.raises(ValueError, match="reference"):
+            c.PostingWorkItem.from_wire(
+                self._with_tenders([{"method": "cash", "amount": "1.00", "reference": "AB12"}])
+            )
+
+    @pytest.mark.parametrize("reference", ["ab12", "ABCDEFG", "AB-12", "", 1234])
+    def test_card_reference_must_match_the_short_terminal_pattern(self, reference):
+        with pytest.raises(ValueError, match="reference"):
+            c.PostingWorkItem.from_wire(
+                self._with_tenders(
+                    [{"method": "card_external", "amount": "1.00", "reference": reference}]
+                )
+            )
+
+    def test_tenders_must_be_a_list(self):
+        with pytest.raises(ValueError, match="tenders"):
+            c.PostingWorkItem.from_wire(self._with_tenders({"method": "cash", "amount": "1.00"}))
