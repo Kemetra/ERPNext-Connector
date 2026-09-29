@@ -165,11 +165,18 @@ sets the site up **in ERPNext Desk**. Retail Tower does not load stock or change
    - How the connector sets the posting time:
      - **Sale:** the POS `occurredAt` time, converted to the site timezone and never later than
        now.
-     - **Void:** the same date and time as its sale, raised to the original invoice's timestamp
-       if that is later. A void therefore posts in its sale's fiscal day. A late void is
-       back-dated, which makes ERPNext run a Repost Item Valuation, and it is rejected if that
-       period is closed. Giving voids and refunds their own time is planned contract-first in
-       RT-63.
+     - **Void or return (RT-16 / RT-63):** its **own** business date, at the time Backend-Core
+       recorded it (`reversalOf.businessDate` / `recordedAt`, converted to the site timezone and
+       never later than now). A late void posts on the day it happened and is **not** back-dated
+       into its sale's day. It is still raised to the original invoice's timestamp if that is
+       later, because ERPNext refuses a return dated before its original.
+     - **Older Backend-Core** (no `recordedAt` / `businessDate` on the reversal): the connector
+       falls back to the sale's date and time, so the void posts in its sale's fiscal day, as
+       before.
+     - **Closed accounting period:** if the reversal's own date falls in a closed or frozen period,
+       ERPNext refuses it and the connector rejects it as `validation`. It never re-dates the
+       posting. Repair is a finance decision (reopen the period or an approved adjustment),
+       followed by a Backend-Core re-post.
    - When the zones disagree near midnight, or the POS clock runs ahead, the connector still keeps
      the posting date but clamps the time. It logs `posting.time_adjusted` at ERROR in
      `retail_tower_posting.log`. The listed adjustment tells you what to fix:

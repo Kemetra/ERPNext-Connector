@@ -509,3 +509,61 @@ class TestVoidSettlement:
 		wi = _with_tenders(_reversal_work_item(), c.SaleTender("cash", "200.00"))
 		doc = _build(wi)
 		assert "is_pos" not in doc and "payments" not in doc
+
+
+
+def _timed_void(recorded_at, business_date):
+	"""The default reversal fixture as a VOID carrying the reversal's own RT-63 time and business date."""
+	return _reversal_work_item(
+		reversalOf={
+			"sourceSystem": "pos-pulse",
+			"externalId": "POS-9001",
+			"reversalKind": "void",
+			"recordedAt": recorded_at,
+			"businessDate": business_date,
+		}
+	)
+
+
+class TestReversalOwnTimestamp:
+	"""RT-16 / RT-63 (decision 10348): a reversal posts ON its own businessDate AT its recordedAt.
+
+	The sale (fixture) occurred 2026-06-01T10:00:00Z. Without the RT-63 fields the RT-49 fallback
+	(the sale's time, clamped into the work item's businessDate) still applies.
+	"""
+
+	def test_late_void_posts_on_its_own_day_not_back_dated(self):
+		doc = _build(_timed_void("2026-06-05T09:30:00Z", "2026-06-05"))
+		assert (doc["posting_date"], doc["posting_time"]) == ("2026-06-05", "09:30:00.000000")
+
+	def test_same_day_void_posts_at_its_recorded_time(self):
+		doc = _build(_timed_void("2026-06-01T12:15:00Z", "2026-06-01"))
+		assert (doc["posting_date"], doc["posting_time"]) == ("2026-06-01", "12:15:00.000000")
+
+	def test_missing_fields_fall_back_to_the_sale_rule(self):
+		# No recordedAt/businessDate (older Backend-Core): the sale's 10:00Z clamped into the work
+		# item's businessDate 2026-06-05 → the start of that day (unchanged RT-49 behaviour).
+		doc = _build(_void_work_item())
+		assert (doc["posting_date"], doc["posting_time"]) == ("2026-06-05", "00:00:00.000000")
+
+	def test_stamp_source_prefers_the_reversal_fields(self):
+		assert rb.reversal_stamp_source(_timed_void("2026-06-05T09:30:00Z", "2026-06-05")) == (
+			"2026-06-05T09:30:00Z",
+			"2026-06-05",
+		)
+
+	def test_stamp_source_falls_back_to_the_sale_time_and_work_item_date(self):
+		assert rb.reversal_stamp_source(_void_work_item()) == ("2026-06-01T10:00:00Z", "2026-06-05")
+
+	def test_original_posted_later_still_raises_the_stamp(self):
+		# A POS clock ahead of the server can leave the original invoice later than the void's
+		# server-recorded time on the same day: the glue keeps raise_to_original (RT-49 guard).
+		import datetime
+
+		from retail_tower_erpnext_connector.connector.posting import posting_time as pt
+
+		occurred, day = rb.reversal_stamp_source(_timed_void("2026-06-01T12:15:00Z", "2026-06-01"))
+		stamp = pt.stamp_for(occurred, day, pt.UTC_CLOCK)
+		raised = pt.raise_to_original(stamp, datetime.date(2026, 6, 1), datetime.timedelta(hours=13))
+		assert (raised.posting_date, raised.posting_time) == ("2026-06-01", "13:00:00.000000")
+		assert "raised_to_original" in raised.adjustments

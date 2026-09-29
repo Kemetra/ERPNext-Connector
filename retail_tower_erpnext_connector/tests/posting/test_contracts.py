@@ -265,3 +265,117 @@ class TestSaleTenders:
     def test_tenders_must_be_a_list(self):
         with pytest.raises(ValueError, match="tenders"):
             c.PostingWorkItem.from_wire(self._with_tenders({"method": "cash", "amount": "1.00"}))
+
+
+
+class TestReversalTimestamps:
+    """RT-16 / RT-63 (decision 10348): ``reversalOf.recordedAt`` + ``reversalOf.businessDate``.
+
+    Both optional on parse (an older Backend-Core sends neither → the RT-49 fallback). When sent they
+    must be well-formed, and a ``void`` / ``return`` that carries ``recordedAt`` must carry its own
+    ``businessDate`` (posting-feed 1.3 schema) — a legacy ``refund`` has none (RT-63 P2).
+    """
+
+    def _reversal(self, **ref):
+        wire = _wire_work_item()
+        wire["kind"] = "reversal"
+        wire["reversalOf"] = {"sourceSystem": "pos-pulse", "externalId": "POS-9001", "reversalKind": "void", **ref}
+        return wire
+
+    def test_parses_the_reversal_own_time_and_business_date(self):
+        wi = c.PostingWorkItem.from_wire(
+            self._reversal(recordedAt="2026-06-05T09:30:00Z", businessDate="2026-06-05")
+        )
+        assert (wi.reversal_of.recorded_at, wi.reversal_of.business_date) == (
+            "2026-06-05T09:30:00Z",
+            "2026-06-05",
+        )
+
+    def test_older_backend_core_sends_neither(self):
+        wi = c.PostingWorkItem.from_wire(self._reversal())
+        assert (wi.reversal_of.recorded_at, wi.reversal_of.business_date) == (None, None)
+
+    @pytest.mark.parametrize(
+        "ref",
+        [
+            {"recordedAt": None, "businessDate": None},
+            {"recordedAt": None},
+            {"businessDate": None},
+            {"recordedAt": "2026-06-05T09:30:00Z", "businessDate": None},
+        ],
+    )
+    def test_explicit_null_timestamps_are_malformed(self, ref):
+        # Codex P2 PR #49 round 5: only an OMITTED pair is the older-Backend-Core fallback; a null
+        # (the schema types both as strings) would otherwise fall back to the sale's day silently.
+        with pytest.raises(ValueError, match="null"):
+            c.PostingWorkItem.from_wire(self._reversal(**ref))
+
+    def test_void_with_a_time_but_no_business_date_is_malformed(self):
+        with pytest.raises(ValueError, match="businessDate"):
+            c.PostingWorkItem.from_wire(self._reversal(recordedAt="2026-06-05T09:30:00Z"))
+
+    def test_legacy_refund_carries_a_time_without_a_business_date(self):
+        wi = c.PostingWorkItem.from_wire(
+            self._reversal(reversalKind="refund", recordedAt="2026-06-05T09:30:00Z")
+        )
+        assert (wi.reversal_of.recorded_at, wi.reversal_of.business_date) == ("2026-06-05T09:30:00Z", None)
+
+    @pytest.mark.parametrize("kind", ["void", "refund"])
+    def test_a_business_date_without_its_time_is_malformed(self, kind):
+        # Codex P2 / Greptile PR #49: a lone businessDate would be ignored by the stamp selector and
+        # the reversal silently posted on the sale's day. Only BOTH-absent is the legacy fallback.
+        with pytest.raises(ValueError, match="recordedAt"):
+            c.PostingWorkItem.from_wire(self._reversal(reversalKind=kind, businessDate="2026-06-05"))
+
+    @pytest.mark.parametrize("recorded_at", ["2026-06-05T09:30:00", "2026-06-05T09:30:00.123"])
+    def test_recorded_at_without_a_timezone_offset_is_malformed(self, recorded_at):
+        # Codex P2 / Greptile PR #49: a naive time parsed here but failed later as `other`.
+        with pytest.raises(ValueError, match="offset"):
+            c.PostingWorkItem.from_wire(self._reversal(recordedAt=recorded_at, businessDate="2026-06-05"))
+
+    @pytest.mark.parametrize(
+        "recorded_at",
+        [
+            "2026-06-05T09:30+03:00",
+            "2026-06-05T09Z",
+            "2026-06-05 09:30:00Z",
+            "20260605T093000Z",
+            # Codex P2 PR #49 round 3: fromisoformat normalizes 24:00 to the next midnight.
+            "2026-06-05T24:00:00Z",
+            "2026-06-05T09:60:00Z",
+            "2026-06-05T09:30:61Z",
+            "2026-06-05T09:30:00+24:00",
+        ],
+    )
+    def test_recorded_at_must_follow_the_rfc3339_grammar(self, recorded_at):
+        # Codex P2 PR #49 round 2: fromisoformat also accepts non-RFC 3339 forms (no seconds, a
+        # space separator, basic format), which could then post at a guessed time.
+        with pytest.raises(ValueError, match="RFC 3339"):
+            c.PostingWorkItem.from_wire(self._reversal(recordedAt=recorded_at, businessDate="2026-06-05"))
+
+    @pytest.mark.parametrize("recorded_at", ["2026-06-05T09:30:00.123Z", "2026-06-05T09:30:00.123456+03:00"])
+    def test_recorded_at_with_fractional_seconds_is_accepted(self, recorded_at):
+        wi = c.PostingWorkItem.from_wire(self._reversal(recordedAt=recorded_at, businessDate="2026-06-05"))
+        assert wi.reversal_of.recorded_at == recorded_at
+
+    def test_recorded_at_with_an_explicit_offset_is_accepted(self):
+        wi = c.PostingWorkItem.from_wire(
+            self._reversal(recordedAt="2026-06-05T12:30:00+03:00", businessDate="2026-06-05")
+        )
+        assert wi.reversal_of.recorded_at == "2026-06-05T12:30:00+03:00"
+
+    @pytest.mark.parametrize("recorded_at", ["yesterday", "2026-06-05", 1717580000, ""])
+    def test_malformed_recorded_at_raises(self, recorded_at):
+        with pytest.raises(ValueError, match="recordedAt"):
+            c.PostingWorkItem.from_wire(self._reversal(recordedAt=recorded_at, businessDate="2026-06-05"))
+
+    @pytest.mark.parametrize(
+        "business_date",
+        # Codex P2 PR #49 round 4: 10-char ISO week / ordinal dates pass fromisoformat on 3.11+.
+        ["2026-13-01", "05/06/2026", 20260605, "", "2026-W23-5", "2026-W23-5 ", "2026-156-1", "2026_06_05"],
+    )
+    def test_malformed_business_date_raises(self, business_date):
+        with pytest.raises(ValueError, match="businessDate"):
+            c.PostingWorkItem.from_wire(
+                self._reversal(recordedAt="2026-06-05T09:30:00Z", businessDate=business_date)
+            )
