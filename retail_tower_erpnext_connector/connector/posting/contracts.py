@@ -3,7 +3,8 @@
 
 """Frozen read-models for the fixed 012 posting-feed contract (T010).
 
-These mirror Data-Pulse-2's ``posting-feed.yaml`` (1.1.0-draft) 1:1. The contract is
+These mirror Data-Pulse-2's ``posting-feed.yaml`` 1:1 (1.1.0-draft, plus the RT-76 feed-1.2
+``Sale.tenders`` settlement field). The contract is
 DP2-owned and read-only (FR-015, Principle I) — these DTOs CITE it, never re-derive it.
 
 Apply-only invariant (rider R2 / Q-CON-004): every offered ``SaleLine`` carries a
@@ -15,6 +16,7 @@ This module imports NO frappe — it is the pure-Python core and is unit-tested 
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -32,6 +34,13 @@ WORK_ITEM_KINDS: frozenset[str] = frozenset({"sale_post", "reversal"})
 
 # 012 ReversalRef.reversalKind enum.
 REVERSAL_KINDS: frozenset[str] = frozenset({"void", "refund"})
+
+# 012 SaleTender.method enum (RT-10 D2 pilot methods; vouchers are excluded).
+TENDER_METHODS: frozenset[str] = frozenset({"cash", "card_external"})
+
+# 012 NonNegativeDecimalAmount and SaleTender.reference patterns (posting-feed.yaml, verbatim).
+_NON_NEGATIVE_DECIMAL_RE = re.compile(r"^[0-9]{1,15}(\.[0-9]{1,4})?$")
+_TENDER_REFERENCE_RE = re.compile(r"^[A-Z0-9]{1,6}$")
 
 
 class MissingErpnextItemRef(Exception):
@@ -90,6 +99,50 @@ class ReversalRef:
 
 
 @dataclass(frozen=True)
+class SaleTender:
+    """012 ``SaleTender`` — one way the sale was paid (RT-10 D1/D2), amount NET of change.
+
+    Parsed strictly: an unknown method, a non-string / negative / over-precise amount, a reference
+    on ``cash`` or a reference outside the short card-terminal pattern raises ``ValueError``, which
+    the transport isolates as ``malformed_work_item`` → ``validation``. The connector never guesses
+    or repairs a tender (Principle VI). ``reference`` is the terminal's short reference, never card data.
+    """
+
+    method: str
+    amount: str
+    reference: str | None = None
+
+    @classmethod
+    def from_wire(cls, wire: Mapping[str, object]) -> SaleTender:
+        method = wire.get("method")
+        if method not in TENDER_METHODS:
+            raise ValueError(f"SaleTender.method must be one of {sorted(TENDER_METHODS)}, got {method!r}")
+        amount = wire.get("amount")
+        if not isinstance(amount, str) or not _NON_NEGATIVE_DECIMAL_RE.match(amount):
+            raise ValueError(
+                f"SaleTender.amount must be a non-negative exact-decimal string, got {amount!r}"
+            )
+        reference = wire.get("reference")
+        if reference is not None:
+            if method == "cash":
+                raise ValueError("SaleTender.reference is only allowed on card_external (012)")
+            if not isinstance(reference, str) or not _TENDER_REFERENCE_RE.match(reference):
+                raise ValueError(
+                    f"SaleTender.reference must match ^[A-Z0-9]{{1,6}}$, got {reference!r}"
+                )
+        return cls(method=str(method), amount=amount, reference=reference)
+
+
+def _parse_tenders(raw: object) -> tuple[SaleTender, ...]:
+    """``Sale.tenders``: absent / null / empty → ``()`` (tender-unknown, RT-10 D8); else each parsed."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError(f"Sale.tenders must be a list, got {type(raw).__name__}")
+    return tuple(SaleTender.from_wire(t) for t in raw)
+
+
+@dataclass(frozen=True)
 class SaleLine:
     """012 ``SaleLine`` — a frozen 008 sale-line snapshot carrying the resolved Item identity.
 
@@ -141,6 +194,8 @@ class Sale:
     source_system: str
     external_id: str
     lines: tuple[SaleLine, ...]
+    # RT-78: how the sale was paid. Empty = tender-unknown (posted unpaid, as before — RT-10 D8).
+    tenders: tuple[SaleTender, ...] = ()
 
     @classmethod
     def from_wire(cls, wire: Mapping[str, object]) -> Sale:
@@ -159,6 +214,7 @@ class Sale:
             source_system=str(wire["sourceSystem"]),
             external_id=str(wire["externalId"]),
             lines=tuple(SaleLine.from_wire(line) for line in raw_lines),  # type: ignore[union-attr]
+            tenders=_parse_tenders(wire.get("tenders")),
         )
 
 
