@@ -43,9 +43,10 @@ TENDER_METHODS: frozenset[str] = frozenset({"cash", "card_external"})
 _NON_NEGATIVE_DECIMAL_RE = re.compile(r"^[0-9]{1,15}(\.[0-9]{1,4})?$")
 _TENDER_REFERENCE_RE = re.compile(r"^[A-Z0-9]{1,6}$")
 # RFC 3339 ``date-time`` (full-date "T" full-time with seconds and an offset); fromisoformat alone
-# also accepts forms without seconds or in basic format (Codex P2, PR #49).
+# also accepts forms without seconds or in basic format, and some Pythons normalize 24:00 to the next
+# midnight — so hour/minute/second/offset ranges are part of the grammar (Codex P2, PR #49).
 _RFC3339_DATE_TIME_RE = re.compile(
-    r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$"
+    r"^\d{4}-\d{2}-\d{2}[Tt]([01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d+)?([Zz]|[+-]([01]\d|2[0-3]):[0-5]\d)$"
 )
 
 
