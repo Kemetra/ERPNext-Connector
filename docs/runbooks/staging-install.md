@@ -206,9 +206,32 @@ sets the site up **in ERPNext Desk**. Retail Tower does not load stock or change
    - A void pays back the original invoice's own payment rows (same Modes of Payment and amounts).
      It is rejected if its tenders disagree with how the original was paid.
 
-Returns: a full void restores stock only if the original invoice moved it. Invoices posted
-before this change (`update_stock=0`) get an accounting-only credit note. Refunds never move
-stock until line-aware refunds land (RT-14/RT-16).
+9. **Partial returns (RT-16).** A `return` posts a credit note with **only the returned lines**.
+   Each row is linked to the original invoice row by the `Sales Invoice Item → RT Line Ref`
+   custom field (RT-14 D6; installed by `migrate`), and the refund is paid out in cash through the
+   tender map (prerequisite 8), even against a sale that posted unpaid. Decisions RT-14 10343 and
+   RT-10 10394.
+   - **Invoices posted before RT-16 carry no line ref.** A return against one is rejected as
+     `validation`. Only invoices posted by this Connector version or later can take a partial
+     return. A full void still works on older invoices.
+   - A return is rejected as `validation` if:
+     - it carries no refund tenders;
+     - its refund total differs from the returned total;
+     - a returned amount is not exactly unit price × quantity;
+     - it returns more than the original line sold. ERPNext's over-return cap counts the earlier
+       returns on the same line.
+   - **Precision:** returned amounts must fit the currency precision (EGP has 2 decimals). ERPNext
+     rejects a 4-decimal pro-rata amount (for example 10.00 ÷ 3), so that return is rejected as
+     `validation` and waits for a finance or Backend-Core decision.
+   - **Tax:** no tax rows are posted (VAT is 0 today). A return line with tax cannot settle and is
+     rejected.
+   - **Rollout order:** Backend-Core must keep `POS_RETURNS_ENABLED` **off** until this Connector
+     version (RT-16 **and** RT-78) is deployed, **and** until Backend-Core puts each return's refund
+     tenders on the posting feed.
+
+Voids: a full void restores stock only if the original invoice moved it. Invoices posted before
+RT-48 (`update_stock=0`) get an accounting-only credit note. A legacy amount-only refund is
+rejected as `validation` (RT-71).
 
 ## Uninstall (safety check)
 
