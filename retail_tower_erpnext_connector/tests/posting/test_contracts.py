@@ -305,6 +305,25 @@ class TestReversalTimestamps:
         )
         assert (wi.reversal_of.recorded_at, wi.reversal_of.business_date) == ("2026-06-05T09:30:00Z", None)
 
+    @pytest.mark.parametrize("kind", ["void", "refund"])
+    def test_a_business_date_without_its_time_is_malformed(self, kind):
+        # Codex P2 / Greptile PR #49: a lone businessDate would be ignored by the stamp selector and
+        # the reversal silently posted on the sale's day. Only BOTH-absent is the legacy fallback.
+        with pytest.raises(ValueError, match="recordedAt"):
+            c.PostingWorkItem.from_wire(self._reversal(reversalKind=kind, businessDate="2026-06-05"))
+
+    @pytest.mark.parametrize("recorded_at", ["2026-06-05T09:30:00", "2026-06-05T09:30:00.123"])
+    def test_recorded_at_without_a_timezone_offset_is_malformed(self, recorded_at):
+        # Codex P2 / Greptile PR #49: a naive time parsed here but failed later as `other`.
+        with pytest.raises(ValueError, match="offset"):
+            c.PostingWorkItem.from_wire(self._reversal(recordedAt=recorded_at, businessDate="2026-06-05"))
+
+    def test_recorded_at_with_an_explicit_offset_is_accepted(self):
+        wi = c.PostingWorkItem.from_wire(
+            self._reversal(recordedAt="2026-06-05T12:30:00+03:00", businessDate="2026-06-05")
+        )
+        assert wi.reversal_of.recorded_at == "2026-06-05T12:30:00+03:00"
+
     @pytest.mark.parametrize("recorded_at", ["yesterday", "2026-06-05", 1717580000, ""])
     def test_malformed_recorded_at_raises(self, recorded_at):
         with pytest.raises(ValueError, match="recordedAt"):
