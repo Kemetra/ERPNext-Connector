@@ -318,3 +318,149 @@ class TestPostingTime:
             "2026-06-01",
             "13:00:00.000000",
         )
+
+
+def _mode(method: str) -> str:
+    # The operator-configured tender → Mode of Payment map (RT-10 D5), fail closed on a miss.
+    from retail_tower_erpnext_connector.connector.posting import tender as t
+
+    return t.TenderModeMap({"cash": "Cash", "card_external": "Card Clearing"}).resolve(method)
+
+
+def _tendered(tenders, *, tax_amount=None, pos_total="200.00") -> c.PostingWorkItem:
+    """A sale whose line total is 200.00 (no tax unless given), carrying ``tenders``."""
+    line = {
+        "lineName": "Item A",
+        "unitPrice": "100.00",
+        "currencyCode": "EGP",
+        "quantity": "2",
+        "lineAmount": "200.00",
+        "taxAmount": tax_amount,
+        "unit": "each",
+        "erpnextItemRef": {"doctype": "Item", "name": "ITEM-A"},
+    }
+    return c.PostingWorkItem.from_wire(
+        {
+            "workItemRef": "11111111-1111-4111-8111-111111111111",
+            "kind": "sale_post",
+            "sourceSystem": "pos-pulse",
+            "externalId": "POS-9001",
+            "payloadHash": "a" * 64,
+            "businessDate": "2026-06-01",
+            "itemCursor": "cursor-1",
+            "sale": {
+                "saleRef": "22222222-2222-4222-8222-222222222222",
+                "storeId": "33333333-3333-4333-8333-333333333333",
+                "currencyCode": "EGP",
+                "posTotal": pos_total,
+                "occurredAt": "2026-06-01T10:00:00Z",
+                "businessDate": "2026-06-01",
+                "sourceSystem": "pos-pulse",
+                "externalId": "POS-9001",
+                "lines": [line],
+                "tenders": tenders,
+            },
+        }
+    )
+
+
+def _settle(work_item, **kw):
+    return b.build_sales_invoice(
+        work_item,
+        uom_for=_uom,
+        warehouse_for=_warehouse,
+        customer_for=_customer,
+        mode_of_payment_for=kw.pop("mode_of_payment_for", _mode),
+        **kw,
+    )
+
+
+class TestSettlement:
+    """RT-78 / RT-10 D3(b): a tender-bearing sale posts as ONE paid Sales Invoice (is_pos=1).
+
+    One ``payments`` row per tender, amount verbatim (exact-decimal string). No Payment Entry.
+    """
+
+    def test_cash_sale_is_a_paid_pos_invoice(self):
+        doc = _settle(_tendered([{"method": "cash", "amount": "200.00"}]))
+        assert doc["is_pos"] == 1
+        assert doc["payments"] == [{"mode_of_payment": "Cash", "amount": "200.00"}]
+        # RT-80 / amendment §3: never round a settled total (RT-75 T3a booked a false 0.49 change).
+        assert doc["disable_rounded_total"] == 1
+
+    def test_split_tender_keeps_one_row_per_tender_in_wire_order(self):
+        doc = _settle(
+            _tendered(
+                [
+                    {"method": "cash", "amount": "150.00"},
+                    {"method": "card_external", "amount": "50.00", "reference": "AB12"},
+                ]
+            )
+        )
+        assert doc["payments"] == [
+            {"mode_of_payment": "Cash", "amount": "150.00"},
+            {"mode_of_payment": "Card Clearing", "amount": "50.00"},
+        ]
+
+    def test_tender_unknown_sale_builds_exactly_as_before(self):
+        # RT-10 D8: no tenders → the unpaid invoice of R1's interim mode, no settlement keys.
+        for tenders in (None, []):
+            doc = _settle(_tendered(tenders))
+            assert "is_pos" not in doc and "payments" not in doc
+
+    def test_tender_unknown_sale_needs_no_tender_resolver(self):
+        doc = b.build_sales_invoice(
+            _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+        )
+        assert "payments" not in doc
+
+    def test_unmapped_method_fails_closed(self):
+        from retail_tower_erpnext_connector.connector.posting import tender as t
+
+        only_cash = t.TenderModeMap({"cash": "Cash"}).resolve
+        with pytest.raises(t.UnmappedTender, match="card_external"):
+            _settle(
+                _tendered([{"method": "card_external", "amount": "200.00"}]),
+                mode_of_payment_for=only_cash,
+            )
+
+    def test_tenders_without_a_resolver_fail_closed(self):
+        from retail_tower_erpnext_connector.connector.posting import tender as t
+
+        with pytest.raises(t.UnmappedTender):
+            b.build_sales_invoice(
+                _tendered([{"method": "cash", "amount": "200.00"}]),
+                uom_for=_uom,
+                warehouse_for=_warehouse,
+                customer_for=_customer,
+            )
+
+    def test_tender_total_must_equal_the_line_total(self):
+        from retail_tower_erpnext_connector.connector.posting import tender as t
+
+        with pytest.raises(t.TenderMismatch, match="199.99"):
+            _settle(_tendered([{"method": "cash", "amount": "199.99"}]))
+
+    def test_pos_total_that_differs_from_the_lines_is_rejected(self):
+        # Amendment §4a: tenders sum to posTotal (230 incl. tax) but the invoice is built from the
+        # lines (200). Never adjust a line, invent change or leave a partial balance to force a match.
+        from retail_tower_erpnext_connector.connector.posting import tender as t
+
+        with pytest.raises(t.TenderMismatch):
+            _settle(
+                _tendered([{"method": "cash", "amount": "230.00"}], tax_amount="30.00", pos_total="230.00")
+            )
+
+    def test_totals_compare_as_exact_decimals(self):
+        doc = _settle(
+            _tendered([{"method": "cash", "amount": "100"}, {"method": "cash", "amount": "100.0000"}])
+        )
+        assert [p["amount"] for p in doc["payments"]] == ["100", "100.0000"]
+
+    def test_float_payment_amount_is_not_money_conformant(self):
+        from retail_tower_erpnext_connector.connector.posting import uom as u
+
+        doc = _settle(_tendered([{"method": "cash", "amount": "200.00"}]))
+        doc["payments"][0]["amount"] = 200.0
+        with pytest.raises(u.MoneyConformanceError, match="payments"):
+            u.assert_money_conformance(doc)

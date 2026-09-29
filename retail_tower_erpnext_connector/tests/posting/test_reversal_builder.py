@@ -462,3 +462,42 @@ class TestPostingTime:
 			posting_stamp=pt.PostingStamp("2026-06-05", "09:30:00.000000"),
 		)
 		assert (doc["posting_date"], doc["posting_time"]) == ("2026-06-05", "09:30:00.000000")
+
+
+def _with_tenders(work_item, *tenders):
+	"""The reversal work item's sale snapshot carrying ``tenders`` (the ORIGINAL sale's tenders)."""
+	import dataclasses
+
+	return dataclasses.replace(work_item, sale=dataclasses.replace(work_item.sale, tenders=tuple(tenders)))
+
+
+def _mode(method):
+	from retail_tower_erpnext_connector.connector.posting import tender as t
+
+	return t.TenderModeMap({"cash": "Cash", "card_external": "Card Clearing"}).resolve(method)
+
+
+class TestVoidSettlement:
+	"""RT-78 / RT-10 D6: a void refunds by mirroring the sale's tenders as NEGATIVE payments."""
+
+	def test_void_mirrors_sale_tenders_as_negative_payments(self):
+		wi = _with_tenders(
+			_void_work_item(), c.SaleTender("cash", "150.00"), c.SaleTender("card_external", "50.00", "AB12")
+		)
+		doc = _build(wi, mode_of_payment_for=_mode)
+		assert doc["is_pos"] == 1 and doc["is_return"] == 1
+		assert doc["payments"] == [
+			{"mode_of_payment": "Cash", "amount": "-150.00"},
+			{"mode_of_payment": "Card Clearing", "amount": "-50.00"},
+		]
+
+	def test_void_of_a_tender_unknown_sale_stays_an_outstanding_credit_note(self):
+		doc = _build(_void_work_item(), mode_of_payment_for=_mode)
+		assert "is_pos" not in doc and "payments" not in doc
+
+	def test_refund_never_mirrors_the_sale_tenders(self):
+		# A legacy refund is rejected upstream (RT-71); even so the builder must not pay out the whole
+		# sale's tenders on it. A return pays out its own refundTenders (RT-16), never sale.tenders.
+		wi = _with_tenders(_reversal_work_item(), c.SaleTender("cash", "200.00"))
+		doc = _build(wi, mode_of_payment_for=_mode)
+		assert "is_pos" not in doc and "payments" not in doc
