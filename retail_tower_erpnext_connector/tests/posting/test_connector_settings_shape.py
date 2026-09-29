@@ -100,3 +100,43 @@ class TestLifecycleFieldsAreNonSecret:
             f["fieldname"] for f in doctype["fields"] if f.get("fieldtype") == "Password"
         ]
         assert password_fields == ["dp2_token"]
+
+
+_TENDER_ROW_JSON = (
+    Path(__file__).resolve().parents[2]
+    / "connector"
+    / "doctype"
+    / "rt_tender_mode_map_row"
+    / "rt_tender_mode_map_row.json"
+)
+
+
+class TestTenderModeMap:
+    """RT-78 / RT-10 D5: the tender_method → Mode of Payment map (authorized gated DocType change)."""
+
+    @pytest.fixture(scope="class")
+    def row(self) -> dict:
+        return json.loads(_TENDER_ROW_JSON.read_text(encoding="utf-8"))
+
+    def test_settings_carry_the_tender_map_table(self, fields_by_name: dict[str, dict]):
+        f = fields_by_name["tender_mode_map"]
+        assert (f["fieldtype"], f["options"]) == ("Table", "RT Tender Mode Map Row")
+
+    def test_row_is_a_child_table(self, row: dict):
+        assert (row["istable"], row["name"]) == (1, "RT Tender Mode Map Row")
+
+    def test_method_options_equal_the_wire_enum(self, row: dict):
+        from retail_tower_erpnext_connector.connector.posting.contracts import TENDER_METHODS
+
+        f = {x["fieldname"]: x for x in row["fields"]}["tender_method"]
+        assert f["fieldtype"] == "Select" and f["reqd"] == 1
+        assert set(f["options"].split("\n")) == set(TENDER_METHODS)
+
+    def test_mode_of_payment_links_to_the_erpnext_doctype(self, row: dict):
+        f = {x["fieldname"]: x for x in row["fields"]}["mode_of_payment"]
+        assert (f["fieldtype"], f["options"], f["reqd"]) == ("Link", "Mode of Payment", 1)
+
+    def test_row_name_avoids_the_foundation_business_hints(self, row: dict):
+        # test_foundation's FR-005 scan rejects DocType names resembling business data.
+        hints = ("item", "stock", "price", "sales", "invoice", "warehouse", "bin")
+        assert not [h for h in hints if h in row["name"].lower()]

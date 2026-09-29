@@ -145,3 +145,40 @@ class TestParseStoreCustomerMap:
                     {"store_id": "s1", "customer": "C-B"},
                 ]
             )
+
+
+class TestParseTenderModeMap:
+    """RT-78 / RT-10 D5: ``{tender_method, mode_of_payment}`` rows → ``{method: Mode of Payment}``."""
+
+    def test_parses_rows_to_method_mode_dict(self):
+        rows = [
+            {"tender_method": "cash", "mode_of_payment": "Cash"},
+            {"tender_method": "card_external", "mode_of_payment": "Card Clearing"},
+        ]
+        assert cfg.parse_tender_mode_map(rows) == {"cash": "Cash", "card_external": "Card Clearing"}
+
+    def test_empty_rows_yield_empty_map(self):
+        # Legitimate while sales are tender-unknown; a tender-bearing sale then fails closed per item.
+        assert cfg.parse_tender_mode_map(None) == {}
+        assert cfg.parse_tender_mode_map([]) == {}
+
+    def test_blank_row_is_rejected(self):
+        with pytest.raises(cfg.ConfigError, match="incomplete"):
+            cfg.parse_tender_mode_map([{"tender_method": "cash", "mode_of_payment": ""}])
+
+    def test_duplicate_method_is_rejected(self):
+        rows = [
+            {"tender_method": "cash", "mode_of_payment": "Cash"},
+            {"tender_method": "cash", "mode_of_payment": "Petty Cash"},
+        ]
+        with pytest.raises(cfg.ConfigError, match="duplicate"):
+            cfg.parse_tender_mode_map(rows)
+
+    def test_method_outside_the_wire_enum_is_rejected(self):
+        # The Select field restricts the value; a row that bypassed it is a config error, loud.
+        with pytest.raises(cfg.ConfigError, match="voucher"):
+            cfg.parse_tender_mode_map([{"tender_method": "voucher", "mode_of_payment": "Voucher"}])
+
+    def test_tender_map_is_not_a_required_map(self):
+        # An empty tender map must NOT skip the poll: tender-unknown sales still post unpaid.
+        cfg.require_configured_maps(uom={"each": "Nos"}, warehouse={"s": {}}, customer={"s": "C"})
