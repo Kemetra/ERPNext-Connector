@@ -295,6 +295,21 @@ class TestReversalTimestamps:
         wi = c.PostingWorkItem.from_wire(self._reversal())
         assert (wi.reversal_of.recorded_at, wi.reversal_of.business_date) == (None, None)
 
+    @pytest.mark.parametrize(
+        "ref",
+        [
+            {"recordedAt": None, "businessDate": None},
+            {"recordedAt": None},
+            {"businessDate": None},
+            {"recordedAt": "2026-06-05T09:30:00Z", "businessDate": None},
+        ],
+    )
+    def test_explicit_null_timestamps_are_malformed(self, ref):
+        # Codex P2 PR #49 round 5: only an OMITTED pair is the older-Backend-Core fallback; a null
+        # (the schema types both as strings) would otherwise fall back to the sale's day silently.
+        with pytest.raises(ValueError, match="null"):
+            c.PostingWorkItem.from_wire(self._reversal(**ref))
+
     def test_void_with_a_time_but_no_business_date_is_malformed(self):
         with pytest.raises(ValueError, match="businessDate"):
             c.PostingWorkItem.from_wire(self._reversal(recordedAt="2026-06-05T09:30:00Z"))
