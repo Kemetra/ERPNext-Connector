@@ -1,0 +1,238 @@
+# Copyright (c) 2026, Retail Tower OS and contributors
+# For license information, please see license.txt
+
+"""RT-16 — executable coverage of the partial-return leg in the REAL glue (no bench).
+
+``frappe_glue`` imports frappe, so it is loaded against a minimal stand-in (the RT-71 / RT-78
+pattern). The stand-in holds one ORIGINAL Sales Invoice (two rows carrying ``rt_line_ref``) and a
+Sales Invoice that computes its totals from the payload on insert.
+
+Cases:
+  - a ``return`` is routed to the partial-return builder: only the returned row, linked to the
+    original row by ``rt_line_ref`` with that row's warehouse, ``return_against`` set, refund paid
+    out through the tender map, inserted, verified settled, submitted and acked ``posted``;
+  - a return without refundTenders, or with an unmapped refund method, is rejected as
+    ``validation`` before anything is built;
+  - a return against an original posted before RT-16 (no line refs) is rejected as ``validation``
+    and nothing is inserted.
+"""
+
+import datetime
+import importlib
+import sys
+import types
+from decimal import Decimal
+
+import pytest
+
+from retail_tower_erpnext_connector.connector.posting import contracts as c
+from retail_tower_erpnext_connector.connector.posting.tender import TenderModeMap
+from retail_tower_erpnext_connector.connector.posting.uom import (
+	PreResolvedWarehouse,
+	StoreCustomerMap,
+	UomMap,
+)
+
+_GLUE = "retail_tower_erpnext_connector.connector.posting.frappe_glue"
+_PKG = "retail_tower_erpnext_connector.connector.posting"
+_MISSING = object()
+_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+_STORE = "33333333-3333-4333-8333-333333333333"
+_ORIGINAL = "ACC-SINV-2026-00100"
+
+
+class _Logger:
+	def __init__(self):
+		self.records = []
+
+	def info(self, record):
+		self.records.append(record)
+
+	warning = error = info
+
+
+class _Invoice:
+	def __init__(self, payload, fake):
+		self.payload, self._fake, self.name, self.values = payload, fake, "ACC-SINV-2026-00101", {}
+
+	def insert(self):
+		grand = sum(Decimal(i["amount"]) for i in self.payload["items"])
+		paid = sum(Decimal(p["amount"]) for p in self.payload.get("payments") or [])
+		self.values = {"grand_total": float(grand), "paid_amount": float(paid), "change_amount": 0.0,
+			"write_off_amount": 0.0, "outstanding_amount": float(grand - paid)}
+		self._fake.events.append("insert")
+
+	def get(self, field):
+		return self.values.get(field)
+
+	def submit(self):
+		self._fake.events.append("submit")
+
+
+class _Frappe(types.ModuleType):
+	"""One original invoice: rows A (3 sold) and B (1 sold); ``line_refs=False`` models pre-RT-16."""
+
+	def __init__(self, *, line_refs=True):
+		super().__init__("frappe")
+		self.ValidationError = type("ValidationError", (Exception,), {})
+		self.exceptions = types.SimpleNamespace(
+			UniqueValidationError=type("UniqueValidationError", (self.ValidationError,), {})
+		)
+		self._logger = _Logger()
+		self.logger = lambda name=None: self._logger
+		self.events, self.payloads = [], []
+		self._rows = [
+			{"name": "row-a", "item_code": "ITEM-A", "qty": 3.0, "idx": 1, "warehouse": "Stores - A",
+				"rt_line_ref": _A if line_refs else None, "uom": "Box"},
+			{"name": "row-b", "item_code": "ITEM-B", "qty": 1.0, "idx": 2, "warehouse": "Stores - B",
+				"rt_line_ref": _B if line_refs else None, "uom": "Nos"},
+		]
+		self.db = types.SimpleNamespace(
+			get_value=self._get_value,
+			savepoint=lambda name: self.events.append("savepoint"),
+			rollback=lambda save_point=None: self.events.append("rollback"),
+		)
+		self.utils = types.SimpleNamespace(get_system_timezone=lambda: "UTC")
+
+	def _get_value(self, doctype, filters, fields, **_):
+		if isinstance(filters, dict):  # provenance lookups
+			if filters.get("rt_external_id") == "POS-9001" and filters.get("docstatus") == 1:
+				return _ORIGINAL  # the original sale's invoice
+			return None  # no already-posted return (no crash-window recovery)
+		assert filters == _ORIGINAL
+		if fields == ["posting_date", "posting_time"]:
+			return {"posting_date": datetime.date(2026, 6, 1), "posting_time": datetime.timedelta(hours=10)}
+		return {"update_stock": 1, "disable_rounded_total": 1, "is_pos": 0, "customer": "Original Customer"}
+
+	def get_all(self, doctype, **kwargs):
+		if doctype == "Sales Invoice Item":
+			return [dict(r) for r in self._rows]
+		return []  # Items (no batch/serial) and the original's payments (tender-unknown sale)
+
+	def get_doc(self, payload):
+		self.payloads.append(payload)
+		return _Invoice(payload, self)
+
+
+class _Client:
+	def __init__(self):
+		self.acks = []
+
+	def ack_outcome(self, ref, request, idempotency_key):
+		self.acks.append(request.to_wire())
+
+
+class _Store:
+	def __init__(self):
+		self.writes = []
+
+	def get_document_ref(self, key):
+		return None
+
+	def record_posted(self, key, ref):
+		self.writes.append((key, ref))
+
+
+def _restore(namespace, name, value):
+	namespace.pop(name, None)
+	if value is not _MISSING:
+		namespace[name] = value
+
+
+@pytest.fixture
+def load_glue():
+	pkg = importlib.import_module(_PKG)
+	saved = [
+		(sys.modules, "frappe", sys.modules.get("frappe", _MISSING)),
+		(sys.modules, _GLUE, sys.modules.get(_GLUE, _MISSING)),
+		(vars(pkg), "frappe_glue", vars(pkg).get("frappe_glue", _MISSING)),
+	]
+
+	def _load(fake):
+		sys.modules["frappe"] = fake
+		sys.modules.pop(_GLUE, None)
+		return importlib.import_module(_GLUE)
+
+	yield _load
+	for namespace, name, value in saved:
+		_restore(namespace, name, value)
+
+
+def _line(ref, item, qty, amount):
+	return {"lineRef": ref, "lineName": item, "unitPrice": "100.00", "currencyCode": "EGP", "quantity": qty,
+		"lineAmount": amount, "unit": "each", "erpnextItemRef": {"doctype": "Item", "name": item}}
+
+
+def _return(refund=(("cash", "100.00"),), tax=None):
+	ref = {"sourceSystem": "pos-pulse", "externalId": "POS-9001", "reversalKind": "return",
+		"recordedAt": "2026-06-05T09:30:00Z", "businessDate": "2026-06-05",
+		"returnLines": [{"lineRef": _A, "quantity": "1", "lineAmount": "100.00", "taxAmount": tax}]}
+	if refund is not None:
+		ref["refundTenders"] = [{"method": m, "amount": a} for m, a in refund]
+	return c.PostingWorkItem.from_wire({
+		"workItemRef": "88888888-8888-4888-8888-888888888888", "kind": "reversal", "sourceSystem": "pos-pulse",
+		"externalId": "POS-9001", "payloadHash": "e" * 64, "businessDate": "2026-06-01", "itemCursor": "c-16",
+		"reversalOf": ref,
+		"sale": {"saleRef": "22222222-2222-4222-8222-222222222222", "storeId": _STORE, "currencyCode": "EGP",
+			"posTotal": "400.00", "occurredAt": "2026-06-01T10:00:00Z", "businessDate": "2026-06-01",
+			"sourceSystem": "pos-pulse", "externalId": "POS-9001",
+			"lines": [_line(_A, "ITEM-A", "3", "300.00"), _line(_B, "ITEM-B", "1", "100.00")]},
+	})
+
+
+def _post(glue, work_item, *, tender_map=None):
+	client, store = _Client(), _Store()
+	outcome = glue.post_work_item(
+		work_item,
+		client=client,
+		store=store,
+		uom_map=UomMap({"each": "Nos"}),
+		warehouses=PreResolvedWarehouse({_STORE: {"doctype": "Warehouse", "name": "Map WH"}}),
+		customers=StoreCustomerMap({_STORE: "Walk-in"}),
+		tenders=TenderModeMap({"cash": "Cash"} if tender_map is None else tender_map),
+		correlation_id="rt16-test",
+	)
+	return outcome, client, store
+
+
+class TestReturnInGlue:
+	def test_return_posts_only_the_returned_row_linked_to_the_original(self, load_glue):
+		fake = _Frappe()
+		outcome, client, store = _post(load_glue(fake), _return())
+		assert outcome == "posted" and client.acks[0]["outcome"] == "posted"
+		(payload,) = fake.payloads
+		assert payload["return_against"] == _ORIGINAL and payload["is_return"] == 1
+		assert [(i["item_code"], i["qty"], i["amount"], i["sales_invoice_item"], i["warehouse"], i["uom"]) for i in payload["items"]] == [
+			("ITEM-A", "-1", "-100.00", "row-a", "Stores - A", "Box")
+		]
+		assert payload["customer"] == "Original Customer"  # not the current store map's "Walk-in"
+		assert payload["payments"] == [{"mode_of_payment": "Cash", "amount": "-100.00"}]
+		assert (payload["posting_date"], payload["posting_time"]) == ("2026-06-05", "09:30:00.000000")
+		assert fake.events == ["savepoint", "insert", "submit"] and len(store.writes) == 1
+
+	def test_return_without_refund_tenders_is_rejected_before_building(self, load_glue):
+		fake = _Frappe()
+		outcome, client, _store = _post(load_glue(fake), _return(refund=None))
+		assert outcome == "permanently_rejected" and client.acks[0]["reason"]["category"] == "validation"
+		assert fake.payloads == []
+
+	def test_a_taxed_return_line_is_a_validation_rejection(self, load_glue):
+		# Greptile PR #50: ReturnTaxNotPosted must map to `validation`, not the generic `other`.
+		fake = _Frappe()
+		outcome, client, _store = _post(load_glue(fake), _return(tax="14.00"))
+		assert outcome == "permanently_rejected" and client.acks[0]["reason"]["category"] == "validation"
+		assert fake.payloads == []
+
+	def test_unmapped_refund_method_is_rejected_before_building(self, load_glue):
+		fake = _Frappe()
+		outcome, client, _store = _post(load_glue(fake), _return(), tender_map={})
+		assert outcome == "permanently_rejected" and client.acks[0]["reason"]["category"] == "validation"
+		assert fake.payloads == []
+
+	def test_return_against_an_original_without_line_refs_is_rejected(self, load_glue):
+		fake = _Frappe(line_refs=False)
+		outcome, client, _store = _post(load_glue(fake), _return())
+		assert outcome == "permanently_rejected" and client.acks[0]["reason"]["category"] == "validation"
+		assert "rt_line_ref" in client.acks[0]["reason"]["message"]
+		assert fake.payloads == []

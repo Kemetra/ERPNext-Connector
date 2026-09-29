@@ -26,6 +26,11 @@ Owner decisions (RT-47 comment 10287; RT-48 comment 10291):
     cross-check it: a paid void of an unpaid original, an unpaid void of a paid original, or a
     different total fails closed (:class:`VoidSettlementMismatch`).
 
+  - **RT-16 / RT-14 D6 — a partial return links by line identity.** Each return row is matched to
+    the original row carrying the same ``rt_line_ref`` (never by position), restores to that row's
+    warehouse and mirrors ``update_stock``; an original posted before RT-16 has no line refs and
+    fails closed (:func:`link_return_to_original`).
+
 The frappe glue only READS the Item flags / original invoice rows and calls these functions.
 This module imports NO frappe and never mutates its inputs.
 """
@@ -196,3 +201,65 @@ def _check_pair(pos: int, line: Mapping[str, object], row: Mapping[str, object])
 		raise ReturnLineMismatch(
 			f"void line {pos} quantity {returned} != original sold quantity {sold} (full void only)"
 		)
+
+
+def link_return_to_original(
+	doc: Mapping[str, object],
+	*,
+	original_update_stock: int,
+	original_items: Sequence[Mapping[str, object]],
+	original_customer: str,
+) -> dict:
+	"""Return a copy of the partial-return ``doc`` linked to its ORIGINAL invoice rows (RT-16).
+
+	RT-14 D6: each return row is matched by ``rt_line_ref`` to the one original row carrying the same
+	sale-line identity — never by position, since a return carries any subset of the lines. The
+	match is checked for ``item_code`` and for a quantity no larger than that row sold, then gets
+	``sales_invoice_item`` (so ERPNext's cumulative over-return cap applies) and the ORIGINAL row's
+	warehouse and UOM (a unit map changed since the sale must not change what the quantity means).
+	``update_stock`` and the ``customer`` mirror the original invoice (a store map changed since the
+	sale must not credit another customer — Codex P2, PR #50). ``original_items`` must be the original
+	invoice's own rows (the glue filters by parent), each with ``rt_line_ref``. An original posted
+	before RT-16 carries no line refs and fails closed (:class:`ReturnLineMismatch`): the owner chose
+	identity over positional pairing (D6).
+	"""
+	if not doc.get("is_return"):
+		raise ValueError("link_return_to_original expects a return (is_return=1) document")
+	out = copy.deepcopy(dict(doc))
+	for pos, line in enumerate(out.get("items") or [], start=1):
+		row = _row_for_line_ref(pos, line, original_items)
+		_check_return_row(pos, line, row)
+		line["sales_invoice_item"] = row["name"]
+		for field in ("warehouse", "uom"):
+			if row.get(field):
+				line[field] = row[field]
+	out["update_stock"] = 1 if int(original_update_stock or 0) else 0
+	if original_customer:
+		out["customer"] = original_customer
+	return out
+
+
+def _row_for_line_ref(pos: int, line: Mapping[str, object], rows: Sequence[Mapping[str, object]]):
+	"""The single original row carrying ``line``'s ``rt_line_ref``; fail closed otherwise."""
+	ref = line.get("rt_line_ref")
+	matches = [r for r in rows if ref and r.get("rt_line_ref") == ref]
+	if not matches:
+		raise ReturnLineMismatch(
+			f"return line {pos}: the original invoice has no row with rt_line_ref {ref!r} "
+			"(posted before RT-16, or a line of another sale)"
+		)
+	if len(matches) > 1:
+		raise ReturnLineMismatch(f"return line {pos}: rt_line_ref {ref!r} is ambiguous on the original invoice")
+	return matches[0]
+
+
+def _check_return_row(pos: int, line: Mapping[str, object], row: Mapping[str, object]) -> None:
+	"""Fail closed unless the return row's Item matches and its quantity is within what was sold."""
+	if line["item_code"] != row["item_code"]:
+		raise ReturnLineMismatch(
+			f"return line {pos} item {line['item_code']!r} != original row item {row['item_code']!r}"
+		)
+	returned = abs(Decimal(str(line["qty"])))
+	sold = abs(Decimal(str(row["qty"])))
+	if returned > sold:
+		raise ReturnLineMismatch(f"return line {pos} quantity {returned} > original sold quantity {sold}")

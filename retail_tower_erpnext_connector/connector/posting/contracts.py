@@ -20,6 +20,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 
 # 012 RejectionReason.category — the closed set. No new wire reason is ever invented
 # (FR-007). An unmapped unit is a `validation` failure (there is no `unmapped_uom`).
@@ -34,7 +35,7 @@ OUTCOMES: frozenset[str] = frozenset({"posted", "failed_transient", "permanently
 WORK_ITEM_KINDS: frozenset[str] = frozenset({"sale_post", "reversal"})
 
 # 012 ReversalRef.reversalKind enum.
-REVERSAL_KINDS: frozenset[str] = frozenset({"void", "refund"})
+REVERSAL_KINDS: frozenset[str] = frozenset({"void", "refund", "return"})
 
 # 012 SaleTender.method enum (RT-10 D2 pilot methods; vouchers are excluded).
 TENDER_METHODS: frozenset[str] = frozenset({"cash", "card_external"})
@@ -50,6 +51,8 @@ _CALENDAR_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _RFC3339_DATE_TIME_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}[Tt]([01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d+)?([Zz]|[+-]([01]\d|2[0-3]):[0-5]\d)$"
 )
+# 012 ReturnLine.quantity pattern (verbatim); the connector additionally requires > 0.
+_RETURN_QUANTITY_RE = re.compile(r"^[0-9]{1,13}(\.[0-9]{1,6})?$")
 
 
 class MissingErpnextItemRef(Exception):
@@ -137,6 +140,93 @@ def _optional_date(wire: Mapping[str, object], field: str) -> str | None:
     return value
 
 
+def _require_object(wire: object, name: str) -> Mapping[str, object]:
+    """A wire element must be a JSON object; anything else is a malformed item (ValueError)."""
+    if not isinstance(wire, Mapping):
+        raise ValueError(f"{name} must be an object, got {type(wire).__name__}")
+    return wire
+
+
+def _non_negative_amount(wire: Mapping[str, object], field: str, name: str) -> str:
+    value = wire.get(field)
+    if not isinstance(value, str) or not _NON_NEGATIVE_DECIMAL_RE.match(value):
+        raise ValueError(f"{name}.{field} must be a non-negative exact-decimal string, got {value!r}")
+    return value
+
+
+@dataclass(frozen=True)
+class ReturnLine:
+    """012 ``ReturnLine`` (RT-14 D1): one returned sale line, priced by Backend-Core.
+
+    Non-negative MAGNITUDES (the connector negates them on the credit note); ``line_ref`` points at
+    ``sale.lines[].lineRef``. Backend-Core prices it by the cumulative-difference rule, so a line's
+    returns sum to its amount exactly.
+    """
+
+    line_ref: str
+    quantity: str
+    line_amount: str
+    tax_amount: str | None = None
+
+    @classmethod
+    def from_wire(cls, wire: object) -> ReturnLine:
+        w = _require_object(wire, "ReturnLine")
+        line_ref = w.get("lineRef")
+        if not isinstance(line_ref, str) or not line_ref:
+            raise ValueError(f"ReturnLine.lineRef must be a non-empty string, got {line_ref!r}")
+        quantity = w.get("quantity")
+        if (
+            not isinstance(quantity, str)
+            or not _RETURN_QUANTITY_RE.match(quantity)
+            or Decimal(quantity) <= 0
+        ):
+            raise ValueError(f"ReturnLine.quantity must be a positive exact-decimal string, got {quantity!r}")
+        line_amount = _non_negative_amount(w, "lineAmount", "ReturnLine")
+        tax_amount = None if w.get("taxAmount") is None else _non_negative_amount(w, "taxAmount", "ReturnLine")
+        return cls(line_ref=line_ref, quantity=quantity, line_amount=line_amount, tax_amount=tax_amount)
+
+
+@dataclass(frozen=True)
+class RefundTender:
+    """012 ``RefundTender`` (RT-14 D3): one cash payout of a ``return``. Cash only; no reference."""
+
+    method: str
+    amount: str
+
+    @classmethod
+    def from_wire(cls, wire: object) -> RefundTender:
+        w = _require_object(wire, "RefundTender")
+        if w.get("method") != "cash":
+            raise ValueError(f"RefundTender.method must be 'cash' (RT-14 D3), got {w.get('method')!r}")
+        if "reference" in w:
+            raise ValueError("RefundTender carries no reference (012 additionalProperties: false)")
+        return cls(method="cash", amount=_non_negative_amount(w, "amount", "RefundTender"))
+
+
+def _parse_list(raw: object, field: str, parse) -> tuple:
+    if not isinstance(raw, list):
+        raise ValueError(f"ReversalRef.{field} must be a list, got {type(raw).__name__}")
+    return tuple(parse(item) for item in raw)
+
+
+def _parse_return_parts(kind: str, wire: Mapping[str, object]) -> tuple[tuple, tuple]:
+    """``(returnLines, refundTenders)``: required lines on a ``return``; both forbidden elsewhere."""
+    raw_lines, raw_tenders = wire.get("returnLines"), wire.get("refundTenders")
+    if kind != "return":
+        for field, raw in (("returnLines", raw_lines), ("refundTenders", raw_tenders)):
+            if raw is not None:
+                raise ValueError(f"ReversalRef.{field} is only allowed on a return, not {kind!r}")
+        return (), ()
+    if not raw_lines:
+        raise ValueError("a return must carry at least one ReversalRef.returnLines entry (012 minItems: 1)")
+    lines = _parse_list(raw_lines, "returnLines", ReturnLine.from_wire)
+    refs = [line.line_ref for line in lines]
+    if len(set(refs)) != len(refs):
+        raise ValueError(f"ReversalRef.returnLines has a duplicate lineRef: {refs}")
+    tenders = () if raw_tenders is None else _parse_list(raw_tenders, "refundTenders", RefundTender.from_wire)
+    return lines, tenders
+
+
 @dataclass(frozen=True)
 class ReversalRef:
     """012 ``ReversalRef`` — provenance of the original sale a reversal targets (O-4).
@@ -151,6 +241,9 @@ class ReversalRef:
     reversal_kind: str
     recorded_at: str | None = None
     business_date: str | None = None
+    # RT-16 / RT-14 D1+D3: only on a `return` — the returned lines and how the cash was paid out.
+    return_lines: tuple[ReturnLine, ...] = ()
+    refund_tenders: tuple[RefundTender, ...] = ()
 
     @classmethod
     def from_wire(cls, wire: Mapping[str, object]) -> ReversalRef:
@@ -158,11 +251,15 @@ class ReversalRef:
         if kind not in REVERSAL_KINDS:
             raise ValueError(f"reversalKind must be one of {sorted(REVERSAL_KINDS)}, got {kind!r}")
         recorded_at = _optional_instant(wire, "recordedAt")
+        return_lines, refund_tenders = _parse_return_parts(kind, wire)
         business_date = _optional_date(wire, "businessDate")
         if business_date is not None and recorded_at is None:
             # Only BOTH-absent is the older-Backend-Core fallback: a lone day would be ignored by the
             # stamp selector and the reversal silently posted on the sale's day (PR #49 review).
             raise ValueError(f"ReversalRef for {kind!r} carries businessDate but no recordedAt (RT-63)")
+        if kind == "return" and recorded_at is None:
+            # A return exists only on feed 1.3, which always carries the reversal's own time + day.
+            raise ValueError("a return must carry reversalOf.recordedAt and businessDate (RT-63)")
         if kind in _DATED_REVERSAL_KINDS and recorded_at is not None and business_date is None:
             # posting-feed 1.3: a void/return carries its own businessDate. A time without its day
             # cannot be stamped correctly (and must never silently fall back to the sale's day).
@@ -173,6 +270,8 @@ class ReversalRef:
             reversal_kind=kind,
             recorded_at=recorded_at,
             business_date=business_date,
+            return_lines=return_lines,
+            refund_tenders=refund_tenders,
         )
 
 
@@ -240,6 +339,8 @@ class SaleLine:
     erpnext_item_ref: ErpnextItemRef
     tax_amount: str | None = None
     tenant_product_ref: str | None = None
+    # RT-16 / RT-14 D6: stable line identity (= sale_lines.id) from feed 1.3; a return points at it.
+    line_ref: str | None = None
 
     @classmethod
     def from_wire(cls, wire: Mapping[str, object]) -> SaleLine:
@@ -260,6 +361,7 @@ class SaleLine:
             tenant_product_ref=(
                 None if wire.get("tenantProductRef") is None else str(wire["tenantProductRef"])
             ),
+            line_ref=None if wire.get("lineRef") is None else str(wire["lineRef"]),
         )
 
 
@@ -286,6 +388,12 @@ class Sale:
         raw_lines = wire["lines"]
         if not raw_lines:
             raise ValueError("Sale.lines must carry at least one line (012 minItems: 1)")
+        lines = tuple(SaleLine.from_wire(line) for line in raw_lines)  # type: ignore[union-attr]
+        refs = [line.line_ref for line in lines if line.line_ref is not None]
+        if len(set(refs)) != len(refs):
+            # lineRef = sale_lines.id (unique per sale). A duplicate would post two invoice rows with
+            # one rt_line_ref and make every later return of that line unmatchable (PR #50 review).
+            raise ValueError(f"Sale.lines carries a duplicate lineRef: {refs}")
         return cls(
             sale_ref=str(wire["saleRef"]),
             store_id=str(wire["storeId"]),
@@ -295,9 +403,17 @@ class Sale:
             business_date=str(wire["businessDate"]),
             source_system=str(wire["sourceSystem"]),
             external_id=str(wire["externalId"]),
-            lines=tuple(SaleLine.from_wire(line) for line in raw_lines),  # type: ignore[union-attr]
+            lines=lines,
             tenders=_parse_tenders(wire.get("tenders")),
         )
+
+
+def _assert_return_lines_point_at_sale_lines(reversal_of: ReversalRef, sale: Sale) -> None:
+    """Every returned ``lineRef`` must name a line of the sale snapshot (RT-14 D6) — else malformed."""
+    known = {line.line_ref for line in sale.lines if line.line_ref is not None}
+    stray = [r.line_ref for r in reversal_of.return_lines if r.line_ref not in known]
+    if stray:
+        raise ValueError(f"ReturnLine.lineRef {stray} does not name a line of the sale snapshot")
 
 
 @dataclass(frozen=True)
@@ -319,7 +435,11 @@ class PostingWorkItem:
         kind = str(wire["kind"])
         if kind not in WORK_ITEM_KINDS:
             raise ValueError(f"kind must be one of {sorted(WORK_ITEM_KINDS)}, got {kind!r}")
-        reversal_of = wire.get("reversalOf")
+        raw_reversal = wire.get("reversalOf")
+        sale = Sale.from_wire(wire["sale"])  # type: ignore[arg-type]
+        reversal_of = None if raw_reversal is None else ReversalRef.from_wire(raw_reversal)  # type: ignore[arg-type]
+        if reversal_of is not None:
+            _assert_return_lines_point_at_sale_lines(reversal_of, sale)
         return cls(
             work_item_ref=str(wire["workItemRef"]),
             kind=kind,
@@ -327,9 +447,9 @@ class PostingWorkItem:
             external_id=str(wire["externalId"]),
             payload_hash=str(wire["payloadHash"]),
             business_date=str(wire["businessDate"]),
-            sale=Sale.from_wire(wire["sale"]),  # type: ignore[arg-type]
+            sale=sale,
             item_cursor=str(wire["itemCursor"]),
-            reversal_of=None if reversal_of is None else ReversalRef.from_wire(reversal_of),
+            reversal_of=reversal_of,
         )
 
     @property

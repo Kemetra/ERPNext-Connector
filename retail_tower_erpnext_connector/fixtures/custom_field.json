@@ -42,5 +42,20 @@
   "print_hide": 1,
   "translatable": 0,
   "description": "Data-Pulse-2 saleRef (008 sale id) audit linkage from this ERPNext Sales Invoice back to the DP2 sale fact (FR-012). Do not edit."
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Sales Invoice Item-rt_line_ref",
+  "dt": "Sales Invoice Item",
+  "fieldname": "rt_line_ref",
+  "label": "RT Line Ref",
+  "fieldtype": "Data",
+  "length": 64,
+  "insert_after": "item_code",
+  "read_only": 1,
+  "no_copy": 1,
+  "print_hide": 1,
+  "translatable": 0,
+  "description": "Data-Pulse-2 sale line identity (posting-feed lineRef = sale_lines.id, RT-14 D6). Set by the Retail Tower connector on every posted invoice row; a partial return is matched to the original row by it. Do not edit."
  }
 ]

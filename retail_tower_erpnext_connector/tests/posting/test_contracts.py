@@ -379,3 +379,126 @@ class TestReversalTimestamps:
             c.PostingWorkItem.from_wire(
                 self._reversal(recordedAt="2026-06-05T09:30:00Z", businessDate=business_date)
             )
+
+
+
+_LINE_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+_LINE_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+
+def _return_wire(**ref):
+    """A posting-feed 1.3 ``return`` work item: a two-line sale, returning part of line A."""
+    wire = _wire_work_item()
+    wire["kind"] = "reversal"
+    wire["sale"]["lines"] = [
+        {**wire["sale"]["lines"][0], "lineRef": _LINE_A, "quantity": "3", "lineAmount": "300.00", "taxAmount": None},
+        {**wire["sale"]["lines"][0], "lineRef": _LINE_B, "lineName": "Item B"},
+    ]
+    wire["reversalOf"] = {
+        "sourceSystem": "pos-pulse",
+        "externalId": "POS-9001",
+        "reversalKind": "return",
+        "recordedAt": "2026-06-05T09:30:00Z",
+        "businessDate": "2026-06-05",
+        "returnLines": [{"lineRef": _LINE_A, "quantity": "1", "lineAmount": "100.00", "taxAmount": None}],
+        "refundTenders": [{"method": "cash", "amount": "100.00"}],
+        **ref,
+    }
+    return wire
+
+
+class TestSaleLineRef:
+    """RT-16 / RT-14 D6: every sale line carries ``lineRef`` (= sale_lines.id) from feed 1.3."""
+
+    def test_parses_the_line_ref(self):
+        wi = c.PostingWorkItem.from_wire(_return_wire())
+        assert [line.line_ref for line in wi.sale.lines] == [_LINE_A, _LINE_B]
+
+    def test_duplicate_line_refs_in_one_sale_are_malformed(self):
+        # Greptile PR #50: lineRef = sale_lines.id is unique per sale; a duplicate would post two
+        # invoice rows with one rt_line_ref and make every later return of that line unmatchable.
+        wire = _return_wire()
+        wire["sale"]["lines"][1]["lineRef"] = _LINE_A
+        with pytest.raises(ValueError, match="duplicate lineRef"):
+            c.PostingWorkItem.from_wire(wire)
+
+    def test_an_older_feed_without_line_ref_still_parses(self):
+        assert c.PostingWorkItem.from_wire(_wire_work_item()).sale.lines[0].line_ref is None
+
+
+class TestReturnReversal:
+    """RT-16 / RT-14 D1+D3: ``reversalKind: return`` with ``returnLines`` and cash ``refundTenders``."""
+
+    def test_parses_return_lines_and_refund_tenders(self):
+        ref = c.PostingWorkItem.from_wire(_return_wire()).reversal_of
+        assert ref.reversal_kind == "return"
+        assert ref.return_lines == (
+            c.ReturnLine(line_ref=_LINE_A, quantity="1", line_amount="100.00", tax_amount=None),
+        )
+        assert ref.refund_tenders == (c.RefundTender(method="cash", amount="100.00"),)
+
+    def test_a_return_without_return_lines_is_malformed(self):
+        for lines in (None, []):
+            with pytest.raises(ValueError, match="returnLines"):
+                c.PostingWorkItem.from_wire(_return_wire(returnLines=lines))
+
+    def test_a_return_needs_its_own_time_and_business_date(self):
+        with pytest.raises(ValueError, match="recordedAt"):
+            c.PostingWorkItem.from_wire(_return_wire(recordedAt=None, businessDate=None))
+
+    @pytest.mark.parametrize("field", ["returnLines", "refundTenders"])
+    def test_return_only_fields_are_forbidden_on_a_void(self, field):
+        wire = _return_wire(reversalKind="void")
+        if field == "returnLines":
+            wire["reversalOf"].pop("refundTenders")
+        else:
+            wire["reversalOf"].pop("returnLines")
+        with pytest.raises(ValueError, match=field):
+            c.PostingWorkItem.from_wire(wire)
+
+    @pytest.mark.parametrize("quantity", ["0", "0.000", "-1", "1.1234567", 1, ""])
+    def test_return_quantity_must_be_a_positive_exact_decimal(self, quantity):
+        lines = [{"lineRef": _LINE_A, "quantity": quantity, "lineAmount": "100.00", "taxAmount": None}]
+        with pytest.raises(ValueError, match="quantity"):
+            c.PostingWorkItem.from_wire(_return_wire(returnLines=lines))
+
+    @pytest.mark.parametrize("amount", ["-1.00", "1.12345", 100.0, None])
+    def test_return_line_amount_must_be_a_non_negative_exact_decimal(self, amount):
+        lines = [{"lineRef": _LINE_A, "quantity": "1", "lineAmount": amount, "taxAmount": None}]
+        with pytest.raises(ValueError, match="lineAmount"):
+            c.PostingWorkItem.from_wire(_return_wire(returnLines=lines))
+
+    def test_duplicate_line_ref_in_one_return_is_malformed(self):
+        one = {"lineRef": _LINE_A, "quantity": "1", "lineAmount": "100.00", "taxAmount": None}
+        with pytest.raises(ValueError, match="duplicate"):
+            c.PostingWorkItem.from_wire(_return_wire(returnLines=[one, dict(one)]))
+
+    def test_a_return_line_must_point_at_a_sale_line(self):
+        stray = [{"lineRef": "cccccccc-cccc-4ccc-8ccc-cccccccccccc", "quantity": "1", "lineAmount": "1.00", "taxAmount": None}]
+        with pytest.raises(ValueError, match="lineRef"):
+            c.PostingWorkItem.from_wire(_return_wire(returnLines=stray))
+
+    @pytest.mark.parametrize("element", [None, "x", ["cash"]])
+    def test_non_object_return_line_or_refund_tender_is_malformed(self, element):
+        with pytest.raises(ValueError, match="object"):
+            c.PostingWorkItem.from_wire(_return_wire(returnLines=[element]))
+        with pytest.raises(ValueError, match="object"):
+            c.PostingWorkItem.from_wire(_return_wire(refundTenders=[element]))
+
+    @pytest.mark.parametrize(
+        "tender",
+        [
+            {"method": "card_external", "amount": "100.00"},  # RT-14 D3: cash only
+            {"method": "cash", "amount": "-100.00"},
+            {"method": "cash", "amount": "100.00", "reference": "AB12"},
+        ],
+    )
+    def test_refund_tenders_are_cash_only_non_negative_and_unreferenced(self, tender):
+        with pytest.raises(ValueError, match="RefundTender"):
+            c.PostingWorkItem.from_wire(_return_wire(refundTenders=[tender]))
+
+    def test_refund_tenders_are_optional_on_parse(self):
+        # The builder rejects a return without them (validation); the wire field itself is optional.
+        wire = _return_wire()
+        wire["reversalOf"].pop("refundTenders")
+        assert c.PostingWorkItem.from_wire(wire).reversal_of.refund_tenders == ()

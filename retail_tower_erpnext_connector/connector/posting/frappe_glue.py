@@ -35,12 +35,20 @@ from .contracts import ErpnextDocumentRef, OutcomeAckRequest, PostingWorkItem
 from .idempotency import IdempotencyConflict, IdempotencyStore, key_for, provenance_id
 from .posting_time import PostingClock, PostingStamp, apply_stamp, raise_to_original, stamp_for
 from .reasons import FailureKind, scrub_message, to_rejection_reason
+from .return_builder import (
+    MissingRefundTenders,
+    ReturnPricingMismatch,
+    ReturnResolvers,
+    ReturnTaxNotPosted,
+    build_return_invoice,
+)
 from .reversal_builder import build_reversing_invoice, reversal_stamp_source
 from .reversal_policy import UnsupportedReversal, assert_reversal_supported
 from .stock_policy import (
     ReturnLineMismatch,
     UnsupportedTrackedItem,
     assert_no_tracked_items,
+    link_return_to_original,
     link_void_to_original,
     tracking_item_codes,
 )
@@ -173,6 +181,7 @@ def post_work_item(
             uom_map=uom_map,
             warehouses=warehouses,
             customers=customers,
+            tenders=tenders,
             correlation_id=correlation_id,
         )
     if work_item.kind != "sale_post":
@@ -323,6 +332,7 @@ def _post_reversal(
     uom_map: UomMap,
     warehouses: PreResolvedWarehouse,
     customers: StoreCustomerMap,
+    tenders: TenderModeMap,
     correlation_id: str,
 ) -> str:
     """Post one ``reversal`` work-item as a return Sales Invoice (credit note). Returns the outcome.
@@ -367,17 +377,23 @@ def _post_reversal(
     try:
         # RT-16 / RT-63: the reversal's own recordedAt + businessDate (RT-49 fallback when absent).
         stamp = stamp_for(*reversal_stamp_source(work_item), _posting_clock())
-        # RT-78: no tender map here — a void's Modes of Payment come from the original invoice.
-        doc_payload = build_reversing_invoice(
-            work_item,
-            uom_for=uom_map.resolve,
-            warehouse_for=warehouses.for_store,
-            customer_for=customers.for_store,
-            posting_stamp=stamp,
+        doc_payload = _build_reversal(
+            work_item, stamp, uom_map=uom_map, warehouses=warehouses, customers=customers, tenders=tenders
         )
     except UnmappedUnit as exc:
         return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, str(exc))
-    except (MoneyConformanceError, UnresolvedWarehouse, UnmappedStore, UnmappedTender, TenderMismatch) as exc:
+    except (
+        MoneyConformanceError,
+        UnresolvedWarehouse,
+        UnmappedStore,
+        UnmappedTender,
+        TenderMismatch,
+        MissingRefundTenders,
+        ReturnPricingMismatch,
+        ReturnTaxNotPosted,
+    ) as exc:
+        # RT-16: a return without refundTenders, or priced other than unitPrice x qty, is rejected
+        # like an unmapped store — never posted as an outstanding credit note or at a guessed amount.
         return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
     except Exception as exc:  # any other build error is non-retryable — never let it escape.
         return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
@@ -413,17 +429,12 @@ def _post_reversal(
     # rounded sale is reversed with its own Round Off), and links each line to its original row so
     # ERPNext's per-line over-return cap applies. A refund stays update_stock=0 and unlinked (its
     # line semantics belong to RT-14/RT-16). Any line mismatch fails closed.
-    if work_item.reversal_of is not None and work_item.reversal_of.reversal_kind == "void":
+    # RT-16 / RT-14 D6 — a partial return links each row to the original row with the same
+    # rt_line_ref (identity), restores to that row's warehouse and mirrors update_stock.
+    kind = work_item.reversal_of.reversal_kind if work_item.reversal_of is not None else None
+    if kind in ("void", "return"):
         try:
-            original = _read_original_invoice(original_name)
-            doc_payload = link_void_to_original(
-                doc_payload,
-                original_update_stock=original["update_stock"],
-                original_disable_rounded_total=original["disable_rounded_total"],
-                original_items=original["items"],
-                original_is_pos=original["is_pos"],
-                original_payments=original["payments"],
-            )
+            doc_payload = _link_to_original(kind, doc_payload, _read_original_invoice(original_name))
         except ReturnLineMismatch as exc:
             return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
         except Exception as exc:  # a read failure must not escape the terminal-outcome invariant.
@@ -636,22 +647,74 @@ def _log_stamp_adjustments(stamp: PostingStamp, work_item: PostingWorkItem, corr
     )
 
 
+def _build_reversal(
+    work_item: PostingWorkItem,
+    stamp: PostingStamp,
+    *,
+    uom_map: UomMap,
+    warehouses: PreResolvedWarehouse,
+    customers: StoreCustomerMap,
+    tenders: TenderModeMap,
+) -> dict:
+    """The pure reversing payload: a partial return (RT-16) or a void/refund credit note.
+
+    A void takes no tender map (its Modes of Payment come from the original invoice, RT-78); a
+    return pays its refund out through the CURRENT map (a new cash payout, RT-10 D6).
+    """
+    if work_item.reversal_of is not None and work_item.reversal_of.reversal_kind == "return":
+        resolvers = ReturnResolvers(
+            uom_for=uom_map.resolve,
+            warehouse_for=warehouses.for_store,
+            customer_for=customers.for_store,
+            mode_of_payment_for=tenders.resolve,
+        )
+        return build_return_invoice(work_item, resolvers, posting_stamp=stamp)
+    return build_reversing_invoice(
+        work_item,
+        uom_for=uom_map.resolve,
+        warehouse_for=warehouses.for_store,
+        customer_for=customers.for_store,
+        posting_stamp=stamp,
+    )
+
+
+def _link_to_original(kind: str, doc_payload: dict, original: dict) -> dict:
+    """Mirror/link a void (whole sale) or a partial return (by rt_line_ref) onto its original invoice."""
+    if kind == "return":
+        return link_return_to_original(
+            doc_payload,
+            original_update_stock=original["update_stock"],
+            original_items=original["items"],
+            original_customer=original["customer"],
+        )
+    return link_void_to_original(
+        doc_payload,
+        original_update_stock=original["update_stock"],
+        original_disable_rounded_total=original["disable_rounded_total"],
+        original_items=original["items"],
+        original_is_pos=original["is_pos"],
+        original_payments=original["payments"],
+    )
+
+
 def _read_original_invoice(name: str) -> dict:
     """Read what a full void mirrors from the original SI (``stock_policy.link_void_to_original``).
 
     ``update_stock`` (RT-48), ``disable_rounded_total`` (RT-80), ``is_pos`` and its payment rows
     ``(mode_of_payment, amount, idx)`` (RT-78), and its item rows
-    ``(name, item_code, qty, idx, warehouse)`` (RT-48).
+    ``(name, item_code, qty, idx, warehouse, rt_line_ref, uom)`` (RT-48; ``rt_line_ref``/``uom`` RT-16)
+    and the ``customer`` a partial return credits. The
+    rows are filtered by ``parent`` — the original only, never an earlier credit note's rows.
 
     ⏳ BENCH-VALIDATION.
     """
     flags = frappe.db.get_value(
-        "Sales Invoice", name, ["update_stock", "disable_rounded_total", "is_pos"], as_dict=True
+        "Sales Invoice", name, ["update_stock", "disable_rounded_total", "is_pos", "customer"], as_dict=True
     ) or {}
     rows = frappe.get_all(
         "Sales Invoice Item",
         filters={"parent": name, "parenttype": "Sales Invoice"},
-        fields=["name", "item_code", "qty", "idx", "warehouse"],
+        fields=["name", "item_code", "qty", "idx", "warehouse", "rt_line_ref", "uom"],
         order_by="idx asc",
     )
     payments = frappe.get_all(
@@ -664,6 +727,7 @@ def _read_original_invoice(name: str) -> dict:
         "update_stock": int(flags.get("update_stock") or 0),
         "disable_rounded_total": int(flags.get("disable_rounded_total") or 0),
         "is_pos": int(flags.get("is_pos") or 0),
+        "customer": flags.get("customer"),
         "items": [dict(row) for row in rows],
         "payments": [dict(row) for row in payments],
     }

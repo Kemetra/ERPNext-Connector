@@ -464,3 +464,44 @@ class TestSettlement:
         doc["payments"][0]["amount"] = 200.0
         with pytest.raises(u.MoneyConformanceError, match="payments"):
             u.assert_money_conformance(doc)
+
+
+class TestLineRef:
+    """RT-16 / RT-14 D6: every Sales Invoice Item carries its sale line's ``lineRef``.
+
+    A later partial return is matched to the ORIGINAL invoice row by this value (the
+    ``Sales Invoice Item-rt_line_ref`` custom field), never by position.
+    """
+
+    def test_items_carry_the_sale_line_ref(self):
+        line = {
+            "lineName": "Item A",
+            "unitPrice": "100.00",
+            "currencyCode": "EGP",
+            "quantity": "2",
+            "lineAmount": "200.00",
+            "unit": "each",
+            "erpnextItemRef": {"doctype": "Item", "name": "ITEM-A"},
+            "lineRef": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        }
+        sale = {
+            "saleRef": "22222222-2222-4222-8222-222222222222",
+            "storeId": "33333333-3333-4333-8333-333333333333",
+            "currencyCode": "EGP",
+            "posTotal": "200.00",
+            "occurredAt": "2026-06-01T10:00:00Z",
+            "businessDate": "2026-06-01",
+            "sourceSystem": "pos-pulse",
+            "externalId": "POS-9001",
+            "lines": [line],
+        }
+        doc = b.build_sales_invoice(
+            _work_item(sale=sale), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+        )
+        assert [i["rt_line_ref"] for i in doc["items"]] == ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]
+
+    def test_an_older_feed_without_line_ref_writes_none(self):
+        doc = b.build_sales_invoice(
+            _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+        )
+        assert "rt_line_ref" not in doc["items"][0]
