@@ -84,9 +84,9 @@ class _Frappe(types.ModuleType):
 		self.events, self.payloads = [], []
 		self._rows = [
 			{"name": "row-a", "item_code": "ITEM-A", "qty": 3.0, "idx": 1, "warehouse": "Stores - A",
-				"rt_line_ref": _A if line_refs else None, "uom": "Box"},
+				"rt_line_ref": _A if line_refs else None, "uom": "Box", "conversion_factor": 12.0},
 			{"name": "row-b", "item_code": "ITEM-B", "qty": 1.0, "idx": 2, "warehouse": "Stores - B",
-				"rt_line_ref": _B if line_refs else None, "uom": "Nos"},
+				"rt_line_ref": _B if line_refs else None, "uom": "Nos", "conversion_factor": 1.0},
 		]
 		self.db = types.SimpleNamespace(
 			get_value=self._get_value,
@@ -107,7 +107,8 @@ class _Frappe(types.ModuleType):
 
 	def get_all(self, doctype, **kwargs):
 		if doctype == "Sales Invoice Item":
-			return [dict(r) for r in self._rows]
+			# Return ONLY the requested fields, like frappe: a field the glue stops reading is dropped.
+			return [{f: r[f] for f in kwargs["fields"] if f in r} for r in self._rows]
 		return []  # Items (no batch/serial) and the original's payments (tender-unknown sale)
 
 	def get_doc(self, payload):
@@ -207,6 +208,8 @@ class TestReturnInGlue:
 			("ITEM-A", "-1", "-100.00", "row-a", "Stores - A", "Box")
 		]
 		assert payload["customer"] == "Original Customer"  # not the current store map's "Walk-in"
+		# Greptile PR #51: the glue must READ the original row's conversion factor, not only copy it.
+		assert payload["items"][0]["conversion_factor"] == 12.0
 		assert payload["payments"] == [{"mode_of_payment": "Cash", "amount": "-100.00"}]
 		assert (payload["posting_date"], payload["posting_time"]) == ("2026-06-05", "09:30:00.000000")
 		assert fake.events == ["savepoint", "insert", "submit"] and len(store.writes) == 1

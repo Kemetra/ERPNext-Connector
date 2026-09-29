@@ -56,5 +56,16 @@ class TestAssertSettled:
         with pytest.raises(t.SettlementDrift):
             t.assert_settled({**_EXACT, **drift})
 
+    def test_totals_rounded_by_erpnext_away_from_the_requested_total_drift(self):
+        # Codex P2 PR #50 round 3: 3.3333 requested, ERPNext rounds item AND payment to 3.33 — the
+        # invoice balances internally but no longer equals what Backend-Core recorded.
+        rounded = {**_EXACT, "grand_total": 3.33, "paid_amount": 3.33}
+        with pytest.raises(t.SettlementDrift, match=r"3.3333"):
+            t.assert_settled(rounded, expected_total="3.3333")
+
+    def test_expected_total_matches_exactly(self):
+        t.assert_settled(_EXACT, expected_total="10.49")
+        t.assert_settled({**_EXACT, "grand_total": -10.49, "paid_amount": -10.49}, expected_total="-10.49")
+
     def test_missing_computed_fields_count_as_zero(self):
         t.assert_settled({"grand_total": 5.0, "paid_amount": 5.0})

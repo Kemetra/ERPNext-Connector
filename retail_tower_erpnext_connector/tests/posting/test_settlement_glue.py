@@ -245,6 +245,15 @@ class TestSettlementInGlue:
 		assert fake.events == ["savepoint", "insert", "rollback"]  # never submitted
 		assert store.writes == []
 
+	def test_erpnext_rounding_away_from_the_requested_total_is_rejected(self, load_glue):
+		# Codex P2 PR #50 round 3: grand_total and paid_amount both rounded (10.49 -> 10.00) still
+		# balance; the invoice must equal the EXACT total the connector asked it to post.
+		fake = _Frappe(drift={"grand_total": 10.0, "paid_amount": 10.0, "outstanding_amount": 0.0})
+		outcome, client, store = _post(load_glue(fake), _sale(_CASH), tender_map={"cash": "Cash"})
+		assert outcome == "permanently_rejected"
+		assert client.acks[0]["reason"]["category"] == "validation"
+		assert fake.events == ["savepoint", "insert", "rollback"] and store.writes == []
+
 	def test_tender_unknown_sale_skips_the_settlement_check(self, load_glue):
 		# An unpaid invoice legitimately keeps its outstanding amount (RT-10 D8).
 		fake = _Frappe()
