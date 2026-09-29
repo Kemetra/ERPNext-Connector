@@ -45,6 +45,8 @@ _TENDER_REFERENCE_RE = re.compile(r"^[A-Z0-9]{1,6}$")
 # RFC 3339 ``date-time`` (full-date "T" full-time with seconds and an offset); fromisoformat alone
 # also accepts forms without seconds or in basic format, and some Pythons normalize 24:00 to the next
 # midnight — so hour/minute/second/offset ranges are part of the grammar (Codex P2, PR #49).
+# RFC 3339 ``full-date`` (a calendar date): fromisoformat on 3.11+ also takes ISO week dates.
+_CALENDAR_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _RFC3339_DATE_TIME_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}[Tt]([01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d+)?([Zz]|[+-]([01]\d|2[0-3]):[0-5]\d)$"
 )
@@ -112,7 +114,7 @@ def _optional_date(wire: Mapping[str, object], field: str) -> str | None:
     value = wire.get(field)
     if value is None:
         return None
-    if not isinstance(value, str) or len(value) != 10:
+    if not isinstance(value, str) or not _CALENDAR_DATE_RE.match(value):
         raise ValueError(f"ReversalRef.{field} must be a YYYY-MM-DD date string, got {value!r}")
     try:
         date.fromisoformat(value)
