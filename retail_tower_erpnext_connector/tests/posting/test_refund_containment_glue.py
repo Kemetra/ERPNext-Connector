@@ -153,6 +153,7 @@ def _post(glue, store, client):
 		uom_map=None,
 		warehouses=None,
 		customers=None,
+		tenders=None,
 		correlation_id="rt71-test",
 	)
 
