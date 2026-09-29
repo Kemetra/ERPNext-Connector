@@ -239,8 +239,10 @@ def _return_doc(*items):
 		"doctype": "Sales Invoice",
 		"is_return": 1,
 		"update_stock": 1,
+		"customer": "Customer From Current Map",
 		"items": [
-			{"item_code": code, "qty": qty, "warehouse": "Map WH", "rt_line_ref": ref} for ref, code, qty in items
+			{"item_code": code, "qty": qty, "uom": "Current UOM", "warehouse": "Map WH", "rt_line_ref": ref}
+			for ref, code, qty in items
 		],
 	}
 
@@ -248,16 +250,19 @@ def _return_doc(*items):
 def _original_with_refs():
 	# The ORIGINAL invoice's rows only (the glue filters by parent): qty is a DB float.
 	return [
-		{"name": "row-a", "item_code": "ITEM-A", "qty": 3.0, "idx": 1, "warehouse": "Stores - A", "rt_line_ref": _A},
-		{"name": "row-b", "item_code": "ITEM-B", "qty": 1.0, "idx": 2, "warehouse": "Stores - B", "rt_line_ref": _B},
+		{"name": "row-a", "item_code": "ITEM-A", "qty": 3.0, "idx": 1, "warehouse": "Stores - A", "rt_line_ref": _A,
+			"uom": "Box"},
+		{"name": "row-b", "item_code": "ITEM-B", "qty": 1.0, "idx": 2, "warehouse": "Stores - B", "rt_line_ref": _B,
+			"uom": "Nos"},
 	]
 
 
-def _link_return(doc, *, original_update_stock=1, original_items=None):
+def _link_return(doc, *, original_update_stock=1, original_items=None, original_customer="Original Customer"):
 	return sp.link_return_to_original(
 		doc,
 		original_update_stock=original_update_stock,
 		original_items=_original_with_refs() if original_items is None else original_items,
+		original_customer=original_customer,
 	)
 
 
@@ -275,6 +280,15 @@ class TestReturnLinkage:
 			("row-b", "Stores - B"),
 			("row-a", "Stores - A"),
 		]
+
+	def test_credits_the_original_invoice_customer(self):
+		# Codex P2 PR #50: a store->customer map changed since the sale must not redirect the credit.
+		assert _link_return(_return_doc((_A, "ITEM-A", "-1")))["customer"] == "Original Customer"
+
+	def test_returns_in_the_original_row_uom(self):
+		# Codex P2 PR #50: a unit->UOM map changed since the sale must not change what qty means.
+		doc = _link_return(_return_doc((_B, "ITEM-B", "-1"), (_A, "ITEM-A", "-1")))
+		assert [i["uom"] for i in doc["items"]] == ["Nos", "Box"]
 
 	def test_mirrors_the_original_update_stock(self):
 		assert _link_return(_return_doc((_A, "ITEM-A", "-1")), original_update_stock=0)["update_stock"] == 0

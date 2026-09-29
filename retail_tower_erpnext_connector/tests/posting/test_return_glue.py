@@ -84,9 +84,9 @@ class _Frappe(types.ModuleType):
 		self.events, self.payloads = [], []
 		self._rows = [
 			{"name": "row-a", "item_code": "ITEM-A", "qty": 3.0, "idx": 1, "warehouse": "Stores - A",
-				"rt_line_ref": _A if line_refs else None},
+				"rt_line_ref": _A if line_refs else None, "uom": "Box"},
 			{"name": "row-b", "item_code": "ITEM-B", "qty": 1.0, "idx": 2, "warehouse": "Stores - B",
-				"rt_line_ref": _B if line_refs else None},
+				"rt_line_ref": _B if line_refs else None, "uom": "Nos"},
 		]
 		self.db = types.SimpleNamespace(
 			get_value=self._get_value,
@@ -103,7 +103,7 @@ class _Frappe(types.ModuleType):
 		assert filters == _ORIGINAL
 		if fields == ["posting_date", "posting_time"]:
 			return {"posting_date": datetime.date(2026, 6, 1), "posting_time": datetime.timedelta(hours=10)}
-		return {"update_stock": 1, "disable_rounded_total": 1, "is_pos": 0}
+		return {"update_stock": 1, "disable_rounded_total": 1, "is_pos": 0, "customer": "Original Customer"}
 
 	def get_all(self, doctype, **kwargs):
 		if doctype == "Sales Invoice Item":
@@ -203,9 +203,10 @@ class TestReturnInGlue:
 		assert outcome == "posted" and client.acks[0]["outcome"] == "posted"
 		(payload,) = fake.payloads
 		assert payload["return_against"] == _ORIGINAL and payload["is_return"] == 1
-		assert [(i["item_code"], i["qty"], i["amount"], i["sales_invoice_item"], i["warehouse"]) for i in payload["items"]] == [
-			("ITEM-A", "-1", "-100.00", "row-a", "Stores - A")
+		assert [(i["item_code"], i["qty"], i["amount"], i["sales_invoice_item"], i["warehouse"], i["uom"]) for i in payload["items"]] == [
+			("ITEM-A", "-1", "-100.00", "row-a", "Stores - A", "Box")
 		]
+		assert payload["customer"] == "Original Customer"  # not the current store map's "Walk-in"
 		assert payload["payments"] == [{"mode_of_payment": "Cash", "amount": "-100.00"}]
 		assert (payload["posting_date"], payload["posting_time"]) == ("2026-06-05", "09:30:00.000000")
 		assert fake.events == ["savepoint", "insert", "submit"] and len(store.writes) == 1

@@ -191,12 +191,17 @@ class TestRefundPayout:
 		with pytest.raises(t.UnmappedTender):
 			_build(_return(), mode_of_payment_for=t.TenderModeMap({}).resolve)
 
-	def test_a_taxed_return_line_is_rejected_while_tax_is_not_posted(self):
-		# VAT is not posted on the invoice today (tax 0): a refund covering tax cannot equal the
-		# line total, so the return is rejected rather than posted with a partial settlement.
+	@pytest.mark.parametrize("refund", ["100.00", "114.00"])
+	def test_a_taxed_return_line_is_rejected_while_tax_is_not_posted(self, refund):
+		# Codex P2 PR #50: no tax rows are posted (VAT 0 today). A taxed line must be rejected even
+		# when the refund equals the line amount, never posted with its tax silently dropped.
 		lines = [{"lineRef": _A, "quantity": "1", "lineAmount": "100.00", "taxAmount": "14.00"}]
-		with pytest.raises(t.TenderMismatch):
-			_build(_return(return_lines=lines, refund_tenders=[{"method": "cash", "amount": "114.00"}]))
+		with pytest.raises(rtb.ReturnTaxNotPosted, match="14.00"):
+			_build(_return(return_lines=lines, refund_tenders=[{"method": "cash", "amount": refund}]))
+
+	def test_a_zero_tax_amount_is_accepted(self):
+		lines = [{"lineRef": _A, "quantity": "1", "lineAmount": "100.00", "taxAmount": "0.00"}]
+		assert _build(_return(return_lines=lines))["items"][0]["amount"] == "-100.00"
 
 
 class TestPricing:
