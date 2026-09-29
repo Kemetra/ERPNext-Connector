@@ -91,9 +91,12 @@ def _optional_instant(wire: Mapping[str, object], field: str) -> str | None:
     if not isinstance(value, str) or "T" not in value:
         raise ValueError(f"ReversalRef.{field} must be an RFC 3339 date-time string, got {value!r}")
     try:
-        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         raise ValueError(f"ReversalRef.{field} is not a valid date-time: {value!r}") from None
+    if parsed.utcoffset() is None:
+        # RFC 3339 requires an offset; a naive time would only fail later, misclassified (PR #49).
+        raise ValueError(f"ReversalRef.{field} must carry a timezone offset (Z or ±hh:mm), got {value!r}")
     return value
 
 
@@ -133,6 +136,10 @@ class ReversalRef:
             raise ValueError(f"reversalKind must be one of {sorted(REVERSAL_KINDS)}, got {kind!r}")
         recorded_at = _optional_instant(wire, "recordedAt")
         business_date = _optional_date(wire, "businessDate")
+        if business_date is not None and recorded_at is None:
+            # Only BOTH-absent is the older-Backend-Core fallback: a lone day would be ignored by the
+            # stamp selector and the reversal silently posted on the sale's day (PR #49 review).
+            raise ValueError(f"ReversalRef for {kind!r} carries businessDate but no recordedAt (RT-63)")
         if kind in _DATED_REVERSAL_KINDS and recorded_at is not None and business_date is None:
             # posting-feed 1.3: a void/return carries its own businessDate. A time without its day
             # cannot be stamped correctly (and must never silently fall back to the sale's day).
