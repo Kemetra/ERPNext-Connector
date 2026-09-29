@@ -8,12 +8,21 @@ Settings (config, injected — never hardcoded). An unmapped method fails closed
 (:class:`UnmappedTender`) → ``permanently_rejected`` / ``validation``: there is no default Mode of
 Payment and the connector never guesses one or its account (Principle VI).
 
+Settlement (RT-10 D3(b), amendment 011-DR-POSTING-A1): a tender-bearing sale posts as ONE Sales
+Invoice carrying its own payments — one row per tender, amount verbatim. :func:`build_payments`
+builds those rows. It fails closed when the tender total differs from the invoice total the
+connector builds from the lines (amendment §4a: never adjust a line, invent change or leave a
+partial balance to force a match) and never derives a tender from ``posTotal`` (R1).
+
 This module imports NO frappe.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
+from decimal import Decimal
+
+from .contracts import SaleTender
 
 
 class UnmappedTender(Exception):
@@ -25,6 +34,22 @@ class UnmappedTender(Exception):
             "validation (RT-10 D5: configure the Connector Settings tender map; never guessed)"
         )
         self.method = method
+
+
+class TenderMismatch(Exception):
+    """The tenders do not sum to the invoice total built from the lines (amendment §4a) → validation.
+
+    A reconciliation case: ``posTotal`` is kept verbatim at capture and may differ from the line sum
+    (008 advisory mismatch flag); the connector never forces a match.
+    """
+
+    def __init__(self, tender_total: Decimal, line_total: Decimal) -> None:
+        super().__init__(
+            f"tender total {tender_total} != invoice line total {line_total} — rejected as validation "
+            "(amendment 4a: no line adjustment, invented change or partial settlement)"
+        )
+        self.tender_total = tender_total
+        self.line_total = line_total
 
 
 class TenderModeMap:
@@ -39,3 +64,26 @@ class TenderModeMap:
             return self._map[method]
         except KeyError:
             raise UnmappedTender(method) from None
+
+
+def build_payments(
+    tenders: Sequence[SaleTender],
+    *,
+    line_amounts: Sequence[str],
+    mode_of_payment_for: Callable[[str], str] | None,
+) -> list[dict]:
+    """The Sales Invoice ``payments`` rows for ``tenders``; ``[]`` for a tender-unknown sale (D8).
+
+    Raises :class:`UnmappedTender` for an unmapped method (or when no resolver was wired — a
+    tender-bearing sale never posts unpaid by omission) and :class:`TenderMismatch` when the tender
+    total differs from ``Σ line_amounts``. Both compare as exact :class:`Decimal` (FR-009).
+    """
+    if not tenders:
+        return []
+    if mode_of_payment_for is None:
+        raise UnmappedTender(tenders[0].method)
+    tender_total = sum((Decimal(t.amount) for t in tenders), Decimal(0))
+    line_total = sum((Decimal(a) for a in line_amounts), Decimal(0))
+    if tender_total != line_total:
+        raise TenderMismatch(tender_total, line_total)
+    return [{"mode_of_payment": mode_of_payment_for(t.method), "amount": t.amount} for t in tenders]

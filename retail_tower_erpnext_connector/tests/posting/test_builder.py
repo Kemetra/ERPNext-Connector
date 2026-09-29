@@ -438,7 +438,7 @@ class TestSettlement:
     def test_tender_total_must_equal_the_line_total(self):
         from retail_tower_erpnext_connector.connector.posting import tender as t
 
-        with pytest.raises(t.TenderMismatch, match="199.99"):
+        with pytest.raises(t.TenderMismatch, match=r"199.99"):
             _settle(_tendered([{"method": "cash", "amount": "199.99"}]))
 
     def test_pos_total_that_differs_from_the_lines_is_rejected(self):

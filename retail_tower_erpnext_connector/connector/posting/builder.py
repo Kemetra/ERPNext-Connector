@@ -21,9 +21,13 @@ document payload the connector will submit. It:
   - sets ``disable_rounded_total = 1`` (RT-80): the site default rounds a fractional total to the
     whole unit (10.49 EGP -> AR 10.00 + 0.49 Round Off), so AR would no longer equal ``posTotal``.
     The reversal builder composes on this one, so credit notes inherit it.
+  - settles a tender-bearing sale on the invoice itself (RT-78, RT-10 D3(b), amendment
+    011-DR-POSTING-A1): ``is_pos = 1`` plus one ``payments`` row per tender (Mode of Payment from
+    the injected tender map), so the invoice is Paid in the same exactly-once submit. A
+    tender-unknown sale builds exactly as before: an unpaid invoice (R1 interim mode, RT-10 D8).
 
-This module imports NO frappe — it builds a plain dict the bench glue submits. The interim
-mode posts a submitted Sales Invoice only (outstanding AR; rider R1) — no Payment Entry here.
+This module imports NO frappe — it builds a plain dict the bench glue submits. There is never a
+Payment Entry here: a paid sale carries its own payments; a tender-unknown one stays outstanding AR.
 """
 
 from __future__ import annotations
@@ -32,6 +36,7 @@ from collections.abc import Callable
 
 from .contracts import PostingWorkItem
 from .posting_time import UTC_CLOCK, PostingStamp, apply_stamp, stamp_for
+from .tender import build_payments
 
 
 class UnmappedUnit(Exception):
@@ -53,6 +58,7 @@ def build_sales_invoice(
     warehouse_for: Callable[[str], dict],
     customer_for: Callable[[str], str],
     posting_stamp: PostingStamp | None = None,
+    mode_of_payment_for: Callable[[str], str] | None = None,
 ) -> dict:
     """Build the ERPNext Sales-Invoice payload for one ``sale_post`` work-item.
 
@@ -64,6 +70,9 @@ def build_sales_invoice(
     customer, which would hide a config gap; Principle VI).
     ``posting_stamp`` is the RT-49 posting date/time; the glue computes it with the ERPNext site
     clock. Without one, it is derived from ``occurredAt`` in UTC (``posting_time.UTC_CLOCK``).
+    ``mode_of_payment_for(method) -> Mode of Payment`` resolves the RT-10 D5 tender map (raises
+    :class:`tender.UnmappedTender` on a miss). It is only consulted when the sale carries tenders;
+    a tender-bearing sale without it fails closed rather than posting unpaid.
     """
     sale = work_item.sale
     warehouse = warehouse_for(sale.store_id)
@@ -106,6 +115,16 @@ def build_sales_invoice(
         "disable_rounded_total": 1,
         "items": items,
     }
+
+    # RT-78 / RT-10 D3(b): a tender-bearing sale is settled on this invoice (no Payment Entry).
+    payments = build_payments(
+        sale.tenders,
+        line_amounts=[item["amount"] for item in items],
+        mode_of_payment_for=mode_of_payment_for,
+    )
+    if payments:
+        doc["is_pos"] = 1
+        doc["payments"] = payments
 
     # FR-009 enforced in the path (not only by a separately-callable check): every monetary
     # field is an exact-decimal string + ISO-4217, never a float. Local import avoids the
