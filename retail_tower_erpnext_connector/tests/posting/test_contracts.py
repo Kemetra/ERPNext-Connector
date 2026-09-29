@@ -320,7 +320,17 @@ class TestReversalTimestamps:
 
     @pytest.mark.parametrize(
         "recorded_at",
-        ["2026-06-05T09:30+03:00", "2026-06-05T09Z", "2026-06-05 09:30:00Z", "20260605T093000Z"],
+        [
+            "2026-06-05T09:30+03:00",
+            "2026-06-05T09Z",
+            "2026-06-05 09:30:00Z",
+            "20260605T093000Z",
+            # Codex P2 PR #49 round 3: fromisoformat normalizes 24:00 to the next midnight.
+            "2026-06-05T24:00:00Z",
+            "2026-06-05T09:60:00Z",
+            "2026-06-05T09:30:61Z",
+            "2026-06-05T09:30:00+24:00",
+        ],
     )
     def test_recorded_at_must_follow_the_rfc3339_grammar(self, recorded_at):
         # Codex P2 PR #49 round 2: fromisoformat also accepts non-RFC 3339 forms (no seconds, a
