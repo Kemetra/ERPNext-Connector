@@ -222,7 +222,13 @@ sets the site up **in ERPNext Desk**. Retail Tower does not load stock or change
        returns on the same line.
    - **Precision:** returned amounts must fit the currency precision (EGP has 2 decimals). ERPNext
      rejects a 4-decimal pro-rata amount (for example 10.00 ÷ 3), so that return is rejected as
-     `validation` and waits for a finance or Backend-Core decision.
+     `validation`. Owner decision RT-87 (comment 10526) fixes this at the source instead of here:
+     once Backend-Core runs RT-105 (merged to `main` at `7218fa9`), capture rejects a sale line
+     whose money exceeds the currency's minor unit, whose line amount is not exactly unit price ×
+     quantity, or whose quantity is fractional (422 `sale_line_pricing_invalid`). Every return of
+     a line captured after that prices to exactly unit price × quantity and posts. A sale captured
+     before it is never re-checked, so its partial return can still be rejected here; that return
+     is a reconciliation case. The Connector itself is unchanged.
    - **Tax:** no tax rows are posted (VAT is 0 today). A return line with tax cannot settle and is
      rejected.
    - **Rollout order:** Backend-Core must keep `POS_RETURNS_ENABLED` **off** until this Connector
