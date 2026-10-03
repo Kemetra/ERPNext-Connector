@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import frappe
 
+from ..request_id import new_request_id
 from . import worker
 from .frappe_store import FrappePostingLogStore
 
@@ -94,7 +95,8 @@ def _build_posting_path():
     from .transport import PostingFeedClient
     from .uom import PreResolvedWarehouse, StoreCustomerMap, UomMap
 
-    correlation_id = frappe.generate_hash(length=16)
+    # RT-39 — a UUID so Backend-Core keeps + echoes it (it re-mints any non-UUID X-Request-Id).
+    correlation_id = new_request_id()
     settings = frappe.get_doc("Connector Settings")  # one read; child tables + Password live here
 
     # Proactive credential-lifecycle warnings (007 OQ-1 expiry + OQ-2 unlinked): best-effort, BEFORE

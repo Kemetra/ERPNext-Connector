@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import frappe
 
+from ..request_id import new_request_id
 from . import worker
 from .transport import BinViewClient, ReportConflict, ReportNotFound
 from .worker import WindowOverflowError
@@ -83,7 +84,8 @@ def _build_bin_view_path():
     from .frappe_glue import FrappeBinReader, UtcClock
     from ..posting.poller import _build_http_transport  # reuse the auth-backed transport
 
-    correlation_id = frappe.generate_hash(length=16)
+    # RT-39 — a UUID so Backend-Core keeps + echoes it (it re-mints any non-UUID X-Request-Id).
+    correlation_id = new_request_id()
     settings = frappe.get_doc("Connector Settings")
     transport = _build_http_transport(settings)
     client = BinViewClient(transport, correlation_id=correlation_id)
