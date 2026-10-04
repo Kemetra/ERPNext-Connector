@@ -150,3 +150,65 @@ def test_report_snapshot_unexpected_status_raises():
     fake = FakeTransport({}, _Resp(500, body={"code": "system_failure"}))
     with pytest.raises(RuntimeError):
         _client(fake).report_snapshot("req-1", _report(), idempotency_key="idem-1")
+
+
+# --- RT-176: stock-view 1.2 conflict codes + progress fields ---------------------------
+
+
+def _window_report(seq: int) -> c.BinViewSnapshotReport:
+    return c.BinViewSnapshotReport(
+        entries=_report().entries,
+        read_at="2026-06-08T10:00:00.000Z",
+        window=c.BinViewReportWindow(attempt_ref="att-1", window_seq=seq, is_final=False),
+    )
+
+
+def test_report_snapshot_409_window_sequence_conflict_in_error_envelope():
+    body = {"error": {"code": "window_sequence_conflict", "message": "m"}}
+    fake = FakeTransport({}, _Resp(409, body=body))
+    with pytest.raises(t.WindowSequenceConflict) as info:
+        _client(fake).report_snapshot("req-1", _window_report(3), idempotency_key="k")
+    assert info.value.window_seq == 3
+    # Still a ReportConflict for catch-all handlers.
+    assert isinstance(info.value, t.ReportConflict)
+
+
+def test_report_snapshot_409_window_sequence_conflict_on_v1_report_is_seq_zero():
+    fake = FakeTransport({}, _Resp(409, body={"error": {"code": "window_sequence_conflict"}}))
+    with pytest.raises(t.WindowSequenceConflict) as info:
+        _client(fake).report_snapshot("req-1", _report(), idempotency_key="k")
+    assert info.value.window_seq == 0
+
+
+def test_report_snapshot_409_idempotency_conflict_in_envelope_is_not_a_sequence_conflict():
+    fake = FakeTransport({}, _Resp(409, body={"error": {"code": "idempotency_key_conflict"}}))
+    with pytest.raises(t.ReportConflict) as info:
+        _client(fake).report_snapshot("req-1", _window_report(1), idempotency_key="k")
+    assert not isinstance(info.value, t.WindowSequenceConflict)
+    assert str(info.value) == "idempotency_key_conflict"
+
+
+def test_report_snapshot_409_without_code_defaults_to_key_conflict():
+    fake = FakeTransport({}, _Resp(409, body={}))
+    with pytest.raises(t.ReportConflict) as info:
+        _client(fake).report_snapshot("req-1", _report(), idempotency_key="k")
+    assert not isinstance(info.value, t.WindowSequenceConflict)
+
+
+def test_report_result_exposes_v12_progress_fields():
+    fake = FakeTransport(
+        {}, _Resp(201, body={"requestRef": "r", "windowSeq": 0, "windowsRecorded": 1, "complete": False})
+    )
+    result = _client(fake).report_snapshot("req-1", _window_report(0), idempotency_key="k")
+    view = result.recorded_view
+    assert (view.window_seq, view.windows_recorded, view.complete) == (0, 1, False)
+    # The window object went on the wire.
+    assert fake.calls[0][2]["window"] == {"attemptRef": "att-1", "windowSeq": 0, "isFinal": False}
+
+
+def test_pulled_request_carries_max_windows():
+    wire = _wire_request()
+    wire["itemWindow"]["maxWindows"] = 20
+    fake = FakeTransport({"items": [wire], "cursor": "c", "next_page_token": None})
+    page = _client(fake).pull_requests(since=None)
+    assert page.items[0].item_window.max_windows == 20

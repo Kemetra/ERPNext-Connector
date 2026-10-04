@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from .contracts import BinViewRequest, BinViewSnapshotReport
+from .contracts import BinViewRequest, BinViewSnapshotReport, RecordedBinView
 
 # spec-003 substrate: DP2 request_id correlation on every call (Principle V).
 CORRELATION_HEADER = "X-Request-Id"
@@ -39,6 +39,24 @@ _MAX_LIMIT = 500
 class ReportConflict(Exception):
     """DP2 returned 409 idempotency_key_conflict — same key + a different snapshot.
     Requires operator attention; the connector MUST NOT blind-retry."""
+
+
+class WindowSequenceConflict(ReportConflict):
+    """DP2 returned 409 ``window_sequence_conflict`` (stock-view 1.2) — a report window that
+    does not fit the recorded attempt: a gap / out-of-order ``windowSeq``, a window after the
+    final one, a stale or superseded ``attemptRef`` (incl. ANY other attempt once one is
+    complete), a duplicate item across windows, or a ``readAt`` mismatch. Deterministic, no
+    side effects. ``window_seq`` is the refused window's sequence (0 for a v1 report).
+
+    A subclass of :class:`ReportConflict` so a catch-all conflict handler still sees it; the
+    bin-view poller catches it FIRST because, unlike a key conflict, it is recoverable."""
+
+    def __init__(self, code: str, *, window_seq: int) -> None:
+        super().__init__(code)
+        self.window_seq = window_seq
+
+
+_WINDOW_SEQUENCE_CONFLICT = "window_sequence_conflict"
 
 
 class ReportNotFound(Exception):
@@ -77,6 +95,11 @@ class ReportResult:
     recorded: bool
     replayed: bool
     body: dict
+
+    @property
+    def recorded_view(self) -> RecordedBinView:
+        """The tolerant parse of the response body (incl. the v1.2 progress fields)."""
+        return RecordedBinView.from_wire(self.body)
 
 
 class BinViewClient:
@@ -132,7 +155,8 @@ class BinViewClient:
 
         ``Idempotency-Key`` is REQUIRED (019 x-idempotency: required). Interprets the served
         status: 201 (first record) + 200 (+ ``Idempotent-Replayed: true``) are both success;
-        409 → :class:`ReportConflict` (operator attention, no blind retry);
+        409 ``window_sequence_conflict`` → :class:`WindowSequenceConflict` (v1.2 multi-window);
+        any other 409 → :class:`ReportConflict` (operator attention, no blind retry);
         404 → :class:`ReportNotFound` (non-disclosing — stale run / cross-tenant).
         """
         resp = self._transport.post(
@@ -140,10 +164,11 @@ class BinViewClient:
             json=report.to_wire(),
             headers=self._headers({IDEMPOTENCY_HEADER: idempotency_key}),
         )
-        return self._interpret_report(resp)
+        window_seq = 0 if report.window is None else report.window.window_seq
+        return self._interpret_report(resp, window_seq=window_seq)
 
     @staticmethod
-    def _interpret_report(resp: object) -> ReportResult:
+    def _interpret_report(resp: object, *, window_seq: int = 0) -> ReportResult:
         # A legacy/simple transport returns a plain body dict — treat as a 201 success.
         if not hasattr(resp, "status"):
             return ReportResult(recorded=True, replayed=False, body=dict(resp or {}))  # type: ignore[arg-type]
@@ -151,10 +176,25 @@ class BinViewClient:
         headers = getattr(resp, "headers", {}) or {}
         body = getattr(resp, "body", {}) or {}
         if status == 409:
-            raise ReportConflict(str(body.get("code", "idempotency_key_conflict")))
+            code = _error_code(body, "idempotency_key_conflict")
+            if code == _WINDOW_SEQUENCE_CONFLICT:
+                raise WindowSequenceConflict(code, window_seq=window_seq)
+            raise ReportConflict(code)
         if status == 404:
-            raise ReportNotFound(str(body.get("code", "not_found")))
+            raise ReportNotFound(_error_code(body, "not_found"))
         if status in (200, 201):
             replayed = str(headers.get("Idempotent-Replayed", "")).lower() == "true"
             return ReportResult(recorded=True, replayed=replayed, body=body)
         raise RuntimeError(f"unexpected report status {status}: {body!r}")
+
+
+def _error_code(body: object, default: str) -> str:
+    """The error ``code`` from DP2's canonical envelope ``{"error": {"code": ...}}`` (or a flat
+    ``{"code": ...}`` body, as older fakes/transports return); ``default`` when neither is set."""
+    if isinstance(body, dict):
+        envelope = body.get("error")
+        if isinstance(envelope, dict) and envelope.get("code"):
+            return str(envelope["code"])
+        if body.get("code"):
+            return str(body["code"])
+    return default
