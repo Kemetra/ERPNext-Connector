@@ -19,6 +19,7 @@ retry set by the NEXT tick.
 """
 
 import importlib
+import pickle
 import sys
 import types
 
@@ -45,20 +46,48 @@ class _Logger:
         return self._log(level)
 
 
+class _Pipe:
+    """MULTI/EXEC stand-in: queued commands run together on ``execute``."""
+
+    def __init__(self, redis):
+        self._redis, self._ops = redis, []
+
+    def get(self, key):
+        self._ops.append(lambda: self._redis.get(key))
+
+    def delete(self, key):
+        self._ops.append(lambda: int(self._redis.pop(key, None) is not None))
+
+    def execute(self):
+        return [op() for op in self._ops]
+
+
 class _Cache:
+    """Mirrors frappe v15 ``RedisWrapper``: pickled values under ``make_key`` + a pipeline."""
+
     def __init__(self):
         self.values = {}
+        self.redis = {}  # the raw store: make_key(key) -> pickled value
         self.writes = []  # (key, retry state as stored at the moment of this write)
+
+    def make_key(self, key):
+        return f"site_db|{key}".encode()
 
     def get_value(self, key):
         return self.values.get(key)
 
     def set_value(self, key, value, **_kwargs):
         self.values[key] = value
+        self.redis[self.make_key(key)] = pickle.dumps(value)
         self.writes.append((key, self.values.get("rt_bin_view_retry")))
 
     def delete_value(self, key):
         self.values.pop(key, None)
+        self.redis.pop(self.make_key(key), None)
+
+    def pipeline(self, transaction=True):
+        assert transaction is True
+        return _Pipe(self.redis)
 
 
 @pytest.fixture
@@ -176,7 +205,7 @@ def _run_jobs(fake, poller):
     while fake.jobs:
         job = fake.jobs.pop(0)
         assert job["method"] == "retail_tower_erpnext_connector.connector.bin_view.poller.run_paged_report_job"
-        poller.run_paged_report_job(request_wire=job["request_wire"])
+        poller.run_paged_report_job(request_wire=job["request_wire"], retried=job["retried"])
 
 
 def _tick(fake, dp2, reader, *, run_jobs=True):
@@ -692,3 +721,127 @@ def test_a_crash_mid_page_keeps_completed_outcomes_and_never_double_counts(frapp
     counts = _post_counts(dp2)
     assert counts == {**{_ref(i): 1 for i in range(8)}, _ref(2): 2}  # the killed call + one retry
     assert len(_retry_state(frappe_stub)) == 0
+
+
+# --- substitute review of #56 at 17891fc ---------------------------------------------------------
+
+
+def _paged_request(i):
+    contracts = importlib.import_module(f"{_ROOT}.connector.bin_view.contracts")
+    return contracts.BinViewRequest.from_wire(_wire(_ref(i), max_windows=20))
+
+
+def _fill_retry_set_with_in_flight_paged(fake):
+    rs = r.RetrySet()
+    for i in range(r.MAX_PENDING):
+        rs.record_failure(_paged_request(i))
+        fake.jobs.append({"job_id": f"rt_bin_view_paged::{_ref(i)}"})  # queued/running
+    fake.cache_obj.values["rt_bin_view_retry"] = rs.to_state()
+
+
+@pytest.mark.parametrize("max_windows", [20, None])
+def test_a_full_retry_set_holds_new_requests_back_instead_of_abandoning_them(frappe_stub, max_windows):
+    _fill_retry_set_with_in_flight_paged(frappe_stub)
+    new = _wire(_ref(500), max_windows=max_windows)
+    dp2 = _FeedDp2([new])
+    reader = _Reader(3)
+
+    assert _tick(frappe_stub, dp2, reader, run_jobs=False) == []
+    # Not abandoned, not attempted, and the cursor did NOT pass it.
+    assert _events(frappe_stub, "bin_view.report.incomplete_abandoned") == []
+    assert len(_events(frappe_stub, "bin_view.poll.retry_set_full")) == 1
+    assert frappe_stub.cache_obj.values.get("rt_bin_view_cursor") is None
+    assert _ref(500) not in _retry_state(frappe_stub)
+    assert not any(job["job_id"] == f"rt_bin_view_paged::{_ref(500)}" for job in frappe_stub.jobs)
+
+    # Room frees: one held request's job finishes and its outcome is folded in on the next tick.
+    frappe_stub.jobs.pop(0)
+    frappe_stub.cache_obj.set_value(
+        f"rt_bin_view_outcome::{_ref(0)}", {"resolved": True, "reason": "", "detail": ""}, expires_in_sec=60
+    )
+    posts = _tick(frappe_stub, dp2, reader, run_jobs=False)
+    assert _ref(0) not in _retry_state(frappe_stub)
+    assert frappe_stub.cache_obj.values["rt_bin_view_cursor"] == _ref(500)  # picked up, then passed
+    if max_windows is None:
+        assert _refs(posts) == [_ref(500)]  # attempted inline
+    else:
+        assert frappe_stub.jobs[-1]["job_id"] == f"rt_bin_view_paged::{_ref(500)}"  # handed off
+
+
+def _seed_paged(fake, i, failures=1):
+    rs = r.RetrySet()
+    for _ in range(failures):
+        if _ref(i) in rs:
+            rs.charge_retry(_paged_request(i))
+        else:
+            rs.record_failure(_paged_request(i))
+    fake.cache_obj.values["rt_bin_view_retry"] = rs.to_state()
+
+
+@pytest.mark.parametrize("resolved", [True, False])
+def test_a_job_finishing_after_the_fold_is_folded_at_hand_off_not_re_run(frappe_stub, resolved):
+    _seed_paged(frappe_stub, 0)
+    dp2 = _Dp2([])
+    poller = _poller(frappe_stub, dp2, _Reader(3))
+    real_fold = poller._fold_job_outcomes
+
+    def fold_then_job_finishes(retries):
+        real_fold(retries)  # reads no outcome ...
+        frappe_stub.cache_obj.set_value(  # ... then the job writes its outcome and exits
+            f"rt_bin_view_outcome::{_ref(0)}",
+            {"resolved": resolved, "reason": "" if resolved else "ConnectionError", "detail": ""},
+            expires_in_sec=60,
+        )
+
+    poller._fold_job_outcomes = fold_then_job_finishes
+    poller.run_bin_view_poll()
+
+    assert frappe_stub.jobs == []  # not charged and re-enqueued
+    assert frappe_stub.cache_obj.make_key(f"rt_bin_view_outcome::{_ref(0)}") not in frappe_stub.cache_obj.redis
+    state = _retry_state(frappe_stub)
+    if resolved:
+        assert _ref(0) not in state
+    else:
+        assert state.failures(_ref(0)) == 1  # settled, not charged again this tick
+        (_, rec), = _events(frappe_stub, "bin_view.report.retry_scheduled")
+        assert rec["reason"] == "ConnectionError"
+
+
+def test_taking_an_outcome_is_atomic_and_one_shot(frappe_stub):
+    poller = _poller(frappe_stub, _Dp2([]), _Reader(3))
+    frappe_stub.cache_obj.set_value(f"rt_bin_view_outcome::{_ref(0)}", {"resolved": True}, expires_in_sec=60)
+    assert poller._take_outcome(_ref(0)) == {"resolved": True}
+    assert poller._take_outcome(_ref(0)) is None
+
+
+_KEY_CONFLICT = {"error": {"code": "idempotency_key_conflict", "message": "m"}}
+
+
+def test_a_v1_retry_hitting_a_key_conflict_is_already_reported_not_an_operator_conflict(frappe_stub):
+    _seed_retry_set(frappe_stub, 1)  # held v1 request (its first attempt's response was lost)
+    dp2 = _Dp2([], post_outcomes=[_Resp(409, _KEY_CONFLICT)])
+    assert _refs(_tick(frappe_stub, dp2, _Reader(3))) == [_ref(0)]
+    (level, rec), = _events(frappe_stub, "bin_view.report.already_reported")
+    assert level == "info" and rec["request_ref"] == _ref(0)
+    assert _events(frappe_stub, "bin_view.report.conflict") == []
+    assert len(_retry_state(frappe_stub)) == 0  # resolved, never blind-retried
+
+
+def test_a_first_attempt_key_conflict_still_needs_operator_attention(frappe_stub):
+    dp2 = _Dp2([_page(_wire(max_windows=None))], post_outcomes=[_Resp(409, _KEY_CONFLICT)])
+    _tick(frappe_stub, dp2, _Reader(3))
+    (level, _rec), = _events(frappe_stub, "bin_view.report.conflict")
+    assert level == "error"
+    assert _events(frappe_stub, "bin_view.report.already_reported") == []
+    assert len(_retry_state(frappe_stub)) == 0
+
+
+def test_a_paged_retry_job_is_told_it_is_a_retry(frappe_stub):
+    _seed_paged(frappe_stub, 0)
+    _tick(frappe_stub, _Dp2([]), _Reader(3), run_jobs=False)
+    (job,) = frappe_stub.jobs
+    assert job["retried"] is True
+    frappe_stub.cache_obj.values.pop("rt_bin_view_cursor")  # the next feed starts from scratch
+    _tick(frappe_stub, _FeedDp2([_wire(_ref(7))]), _Reader(3), run_jobs=False)
+    (first,) = [job for job in frappe_stub.jobs if job["job_id"] == f"rt_bin_view_paged::{_ref(7)}"]
+    assert first["retried"] is False

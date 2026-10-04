@@ -59,6 +59,7 @@ shell (its tick and job logic is also exercised locally against a frappe stand-i
 
 from __future__ import annotations
 
+import pickle
 import time
 from dataclasses import dataclass
 
@@ -140,16 +141,24 @@ class _TickBudget:
         return True
 
 
-@dataclass
-class _Tick:
-    """One cron tick's working set."""
+@dataclass(frozen=True)
+class _Io:
+    """The DP2 client, the ERPNext Bin reader and the ``readAt`` clock of one tick or job."""
 
     client: object
     reader: object
     clock: object
+
+
+@dataclass
+class _Tick:
+    """One cron tick's working set."""
+
+    io: _Io
     retries: RetrySet
     budget: _TickBudget
     attempted: set
+    blocked_on_full_set: bool = False
 
 
 def run_bin_view_poll() -> None:
@@ -165,9 +174,15 @@ def run_bin_view_poll() -> None:
     retries = RetrySet(_load_retry_state())
     _fold_job_outcomes(retries)
     _save_retry_state(retries)
-    tick = _Tick(client, reader, clock, retries, _TickBudget(), set())
+    tick = _Tick(_Io(client, reader, clock), retries, _TickBudget(), set())
     _drain_retries(tick)
     _drain_feed(tick)
+    if tick.blocked_on_full_set:
+        # The feed stopped before a new request: no slot to track it. Held requests free slots
+        # as they resolve or reach the abandon bound, so this always clears.
+        frappe.logger(_LOGGER).warning(
+            {"event": "bin_view.poll.retry_set_full", "retries_held": len(retries)}
+        )
     if tick.budget.exhausted:
         frappe.logger(_LOGGER).info(
             {"event": "bin_view.poll.budget_exhausted", "retries_held": len(retries)}
@@ -197,7 +212,7 @@ def _drain_feed(tick: _Tick) -> None:
     for _ in range(_MAX_PAGES_PER_TICK):
         if not tick.budget.can_call():
             return
-        page = tick.client.pull_requests(since=since)
+        page = tick.io.client.pull_requests(since=since)
         if not _process_page(tick, page):
             return  # out of budget mid-page — the rest of the page waits for the next tick
         _save_retry_state(tick.retries)
@@ -219,10 +234,17 @@ def _process_page(tick: _Tick, page) -> bool:
 
 
 def _handle_feed_request(tick: _Tick, request) -> bool:
-    """One new feed request; False = no inline budget left (left unprocessed, cursor before it)."""
+    """One new feed request; False = left unprocessed for the next tick (cursor stays before it).
+
+    That happens when the retry set has no slot to track it (it is never abandoned unattempted)
+    or when no inline budget is left for a v1 attempt.
+    """
     ref = request.request_ref
     if ref in tick.attempted or ref in tick.retries:
         return True  # handled this tick, or owned by the retry drain — never processed twice
+    if not tick.retries.has_room_for(ref):
+        tick.blocked_on_full_set = True
+        return False
     if request.item_window.is_paged:
         tick.attempted.add(ref)
         _hand_off(request, tick.retries)
@@ -237,25 +259,21 @@ def _handle_feed_request(tick: _Tick, request) -> bool:
 def _attempt_new_inline(tick: _Tick, request) -> None:
     """A new v1 request: charge it into the retry set (checkpointed) BEFORE the network call.
 
-    A worker killed mid-attempt then leaves it durably held for a retry. If the retry set is
-    full it is attempted uncharged, as before, and a failure is abandoned at once.
+    A worker killed mid-attempt then leaves it durably held for a retry. The caller has checked
+    that the set has a slot for it.
     """
-    retries = tick.retries
-    if retries.has_room_for(request.request_ref):
-        _charge(request, retries)
-        _settle(request, retries, _attempt_inline(tick, request))
-    else:
-        outcome = _attempt_inline(tick, request)
-        if not outcome.resolved:
-            _log_failure(request, retries.record_failure(request), outcome)
-    _save_retry_state(retries)
+    _charge(request, tick.retries)
+    _settle(request, tick.retries, _attempt_inline(tick, request))
+    _save_retry_state(tick.retries)
 
 
 def _attempt_inline(tick: _Tick, request) -> _Outcome:
-    return _attempt(request, client=tick.client, reader=tick.reader, clock=tick.clock)
+    """Attempt a just-charged request; ``retried`` when an earlier attempt was charged too."""
+    retried = tick.retries.failures(request.request_ref) >= 2
+    return _attempt(tick.io, request, retried=retried)
 
 
-def run_paged_report_job(request_wire: dict) -> None:
+def run_paged_report_job(request_wire: dict, retried: bool = False) -> None:
     """Long-queue job: ONE paged read-and-report attempt under an explicit time budget.
 
     Never touches the retry set (the cron tick is its only writer); it leaves its outcome under
@@ -275,7 +293,7 @@ def run_paged_report_job(request_wire: dict) -> None:
     deadline = AttemptDeadline(
         worker.attempt_budget_s(request.item_window.max_windows or 1), monotonic=_monotonic
     )
-    outcome = _attempt(request, client=client, reader=reader, clock=clock, deadline=deadline)
+    outcome = _attempt(_Io(client, reader, clock), request, deadline=deadline, retried=retried)
     frappe.cache().set_value(
         _OUTCOME_KEY_PREFIX + request.request_ref,
         {"resolved": outcome.resolved, "reason": outcome.reason, "detail": outcome.detail},
@@ -304,6 +322,11 @@ def _hand_off(request, retries: RetrySet) -> None:
     job_id = _JOB_ID_PREFIX + request.request_ref
     if _job_in_flight(job_id):
         return
+    if request.request_ref in retries and _fold_outcome(request, retries):
+        # The previous job finished after this tick's fold read its key: apply that outcome now
+        # instead of charging and running the request again.
+        _save_retry_state(retries)
+        return
     if not _charge(request, retries):
         return
     budget = worker.attempt_budget_s(request.item_window.max_windows or 1)
@@ -315,6 +338,7 @@ def _hand_off(request, retries: RetrySet) -> None:
             job_id=job_id,
             deduplicate=True,
             request_wire=request.to_wire(),
+            retried=retries.failures(request.request_ref) >= 2,
         )
     except Exception as exc:  # Redis/queue unavailable — already charged; the next tick retries.
         frappe.logger(_LOGGER).warning(
@@ -350,28 +374,49 @@ def _settle(request, retries: RetrySet, outcome: _Outcome) -> None:
 
 def _fold_job_outcomes(retries: RetrySet) -> None:
     """Apply the outcomes finished paged-report jobs left for requests still in the retry set."""
-    cache = frappe.cache()
     for request in retries.pending():
-        key = _OUTCOME_KEY_PREFIX + request.request_ref
-        raw = cache.get_value(key)
-        if not isinstance(raw, dict):
-            continue
-        cache.delete_value(key)
-        outcome = _Outcome(bool(raw.get("resolved")), str(raw.get("reason") or ""),
-                           str(raw.get("detail") or ""))
-        _settle(request, retries, outcome)
+        _fold_outcome(request, retries)
 
 
-def _attempt(request, *, client, reader, clock, deadline=None) -> _Outcome:
+def _fold_outcome(request, retries: RetrySet) -> bool:
+    """Take (atomically) and apply the outcome a finished job left for ``request``; True if any."""
+    raw = _take_outcome(request.request_ref)
+    if not isinstance(raw, dict):
+        return False
+    outcome = _Outcome(bool(raw.get("resolved")), str(raw.get("reason") or ""),
+                       str(raw.get("detail") or ""))
+    _settle(request, retries, outcome)
+    return True
+
+
+def _take_outcome(request_ref: str):
+    """GET + DEL of the job outcome key in ONE Redis transaction (MULTI/EXEC).
+
+    Atomic, so an outcome can never be read twice or dropped between the read and the delete;
+    works on every Redis version (unlike GETDEL, 6.2+). Bypasses ``get_value``'s per-process
+    memo, which could otherwise return a stale miss within the same tick. The key and the
+    pickled value use the same scheme as frappe's ``RedisWrapper.set_value`` (v15).
+    """
+    cache = frappe.cache()
+    key = cache.make_key(_OUTCOME_KEY_PREFIX + request_ref)
+    pipe = cache.pipeline(transaction=True)
+    pipe.get(key)
+    pipe.delete(key)
+    raw, _deleted = pipe.execute()
+    return None if raw is None else pickle.loads(raw)
+
+
+def _attempt(io: _Io, request, *, deadline=None, retried: bool = False) -> _Outcome:
     """One read-and-report attempt for ``request``; classifies how it ended.
 
     Never raises an ``Exception``: completion and the terminal refusals are ``resolved`` (and
     logged); retryable failures come back unresolved with a reason for the caller to record.
+    ``retried`` marks an attempt whose request was already charged for an earlier attempt.
     """
     ref = request.request_ref
     log = frappe.logger(_LOGGER)
     try:
-        worker.process_request(request, client=client, reader=reader, clock=clock,
+        worker.process_request(request, client=io.client, reader=io.reader, clock=io.clock,
                                deadline=deadline)
     except WindowSequenceConflict as exc:
         if exc.window_seq != 0:
@@ -382,9 +427,7 @@ def _attempt(request, *, client, reader, clock, deadline=None) -> _Outcome:
         log.info({"event": "bin_view.report.already_complete", "request_ref": ref,
                   "detail": _safe(str(exc))})
     except ReportConflict as exc:
-        # Same key + a different snapshot — operator attention; never blind-retry.
-        log.error({"event": "bin_view.report.conflict", "request_ref": ref,
-                   "detail": _safe(str(exc))})
+        _log_key_conflict(ref, exc, retried=retried)
     except ReportNotFound as exc:
         # The run completed / went away between pull and report (non-disclosing).
         log.info({"event": "bin_view.report.stale", "request_ref": ref, "detail": _safe(str(exc))})
@@ -403,6 +446,24 @@ def _attempt(request, *, client, reader, clock, deadline=None) -> _Outcome:
     except Exception as exc:  # transport / unexpected DP2 status / read failure — retryable.
         return _Outcome(False, type(exc).__name__, _safe(str(exc)))
     return _Outcome(True)
+
+
+def _log_key_conflict(ref: str, exc: Exception, *, retried: bool) -> None:
+    """409 ``idempotency_key_conflict``: resolved either way, never blind-retried.
+
+    On a RETRY it is expected: an earlier attempt's report was committed but its response was
+    lost, and this attempt re-read a different snapshot under the same v1 key — the run already
+    has its report (info). On a first attempt it needs operator attention (error).
+    """
+    if retried:
+        frappe.logger(_LOGGER).info(
+            {"event": "bin_view.report.already_reported", "request_ref": ref,
+             "detail": _safe(str(exc))}
+        )
+        return
+    frappe.logger(_LOGGER).error(
+        {"event": "bin_view.report.conflict", "request_ref": ref, "detail": _safe(str(exc))}
+    )
 
 
 def _incomplete_attempt(ref: str, exc: Exception) -> _Outcome:
