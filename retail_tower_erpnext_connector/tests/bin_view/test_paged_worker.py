@@ -296,3 +296,82 @@ def test_final_window_without_complete_field_is_accepted():
     # A Backend-Core that omits `complete` (pre-1.2 runtime) is never read as incomplete.
     result, _, _ = _run(_bins(3), _request(), _Transport(responses=[_resp(body={"windowSeq": 0})]))
     assert result.recorded is True
+
+
+# --- attempt deadline (Codex P1 on #56, worker.py:278) ---------------------------------------------
+
+
+class _SlowTransport(_Transport):
+    """Each report call advances the injected monotonic clock by ``seconds``."""
+
+    def __init__(self, clock, seconds):
+        super().__init__()
+        self._clock, self._seconds = clock, seconds
+
+    def post(self, path, *, json, headers):
+        self._clock["t"] += self._seconds
+        return super().post(path, json=json, headers=headers)
+
+
+def _run_with_deadline(n, seconds_per_call, budget_s):
+    clock = {"t": 0.0}
+    transport = _SlowTransport(clock, seconds_per_call)
+    deadline = w.AttemptDeadline(budget_s, monotonic=lambda: clock["t"])
+    w.process_request(
+        _request(),
+        client=t.BinViewClient(transport, correlation_id="c"),
+        reader=_Reader(_bins(n)),
+        clock=_Clock(),
+        deadline=deadline,
+    )
+    return transport
+
+
+def test_deadline_stops_before_a_window_that_could_overrun_the_budget():
+    with pytest.raises(w.AttemptDeadlineExceeded) as info:
+        _run_with_deadline(1037, seconds_per_call=40, budget_s=100)
+    # Before w0: 0+30 <= 100; before w1: 40+30 <= 100; before w2: 80+30 > 100 -> stop.
+    assert info.value.window_seq == 2
+
+
+def test_deadline_sends_no_final_window_when_it_stops():
+    clock = {"t": 0.0}
+    transport = _SlowTransport(clock, 40)
+    with pytest.raises(w.AttemptDeadlineExceeded):
+        w.process_request(
+            _request(),
+            client=t.BinViewClient(transport, correlation_id="c"),
+            reader=_Reader(_bins(1037)),
+            clock=_Clock(),
+            deadline=w.AttemptDeadline(100, monotonic=lambda: clock["t"]),
+        )
+    assert [p["body"]["window"]["windowSeq"] for p in transport.posted] == [0, 1]
+    assert not any(p["body"]["window"]["isFinal"] for p in transport.posted)
+
+
+def test_fast_attempt_under_a_deadline_is_unchanged():
+    transport = _run_with_deadline(1037, seconds_per_call=1, budget_s=w.attempt_budget_s(20))
+    assert [p["body"]["window"]["windowSeq"] for p in transport.posted] == [0, 1, 2]
+    assert [p["body"]["window"]["isFinal"] for p in transport.posted] == [False, False, True]
+
+
+def test_attempt_budget_covers_every_window_at_the_transport_timeout_and_is_capped():
+    assert w.attempt_budget_s(1) == 1 * 30 + 60
+    assert w.attempt_budget_s(20) == 20 * 30 + 60
+    assert w.attempt_budget_s(100) == w.MAX_ATTEMPT_BUDGET_S == 1200
+    # Every window at the full 30 s transport timeout still fits the (uncapped) budget.
+    transport = _run_with_deadline(20 * 500, seconds_per_call=30, budget_s=w.attempt_budget_s(20))
+    assert len(transport.posted) == 20
+
+
+def test_v1_request_ignores_the_deadline():
+    clock = {"t": 0.0}
+    transport = _SlowTransport(clock, 10_000)
+    w.process_request(
+        _request(max_windows=None),
+        client=t.BinViewClient(transport, correlation_id="c"),
+        reader=_Reader(_bins(3)),
+        clock=_Clock(),
+        deadline=w.AttemptDeadline(1, monotonic=lambda: clock["t"]),
+    )
+    assert len(transport.posted) == 1

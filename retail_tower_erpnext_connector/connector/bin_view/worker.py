@@ -21,7 +21,10 @@ Two paths, chosen by the pulled request (stock-view 1.2, RT-176):
   ``binview-{requestRef}-{attemptRef}-w{seq}``. Above ``maxWindows x maxItems`` items
   :class:`WindowLimitExceeded` is raised and NOTHING is reported. A failure mid-attempt
   propagates; the poller retries later with a FRESH attempt from window 0 (DP2
-  supersedes the incomplete one).
+  supersedes the incomplete one). An optional :class:`AttemptDeadline` ends the attempt
+  cleanly BEFORE a window call that could overrun the attempt's time budget
+  (:class:`AttemptDeadlineExceeded`, no ``isFinal`` sent), so the worker running it is
+  never killed mid-write.
 
 §III: ERPNext ``Bin.actual_qty`` is a FLOAT; the connector converts it to an
 exact-decimal STRING deterministically (round HALF-EVEN to 6 fractional digits — the
@@ -33,6 +36,7 @@ locally against a fake. The live composition root is :mod:`.poller` (bench-valid
 
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -44,6 +48,15 @@ from .transport import BinViewClient, ReportResult
 
 # 019 BinEntry.quantity precision cap — at most 6 fractional digits.
 _QTY_QUANTUM = Decimal("0.000001")
+
+# Paged-attempt time budget (Codex P1 on #56). One report call is bounded by the DP2 transport
+# timeout (``posting.poller._RequestsTransport``: 30 s); the keyset Bin read gets a fixed
+# allowance. A paged attempt's budget is therefore ``maxWindows x 30 s + 60 s`` — enough for
+# every window even at the worst-case call time — capped so the long-queue job that runs it
+# (budget + margin, see ``poller``) stays under Frappe v15's 1500 s long-queue timeout.
+TRANSPORT_TIMEOUT_S = 30
+READ_ALLOWANCE_S = 60
+MAX_ATTEMPT_BUDGET_S = 1200
 
 
 class WindowOverflowError(Exception):
@@ -68,6 +81,50 @@ class WindowLimitExceeded(Exception):
     def __init__(self, message: str, *, limit: int) -> None:
         super().__init__(message)
         self.limit = limit
+
+
+class AttemptDeadlineExceeded(Exception):
+    """A paged attempt stopped BEFORE window ``window_seq`` because that call could overrun the
+    attempt's time budget. Windows ``0..window_seq-1`` were sent; no ``isFinal`` was. The attempt
+    is incomplete (DP2 supersedes it on the next attempt) and is retried within the bound."""
+
+    def __init__(self, message: str, *, window_seq: int) -> None:
+        super().__init__(message)
+        self.window_seq = window_seq
+
+
+class AttemptDeadline:
+    """Deterministic elapsed-time budget for one paged attempt (clock injectable for tests).
+
+    Started when constructed. :meth:`check` is called before each window call and raises
+    :class:`AttemptDeadlineExceeded` when ``elapsed + per_call_s`` would pass ``budget_s``.
+    """
+
+    def __init__(
+        self,
+        budget_s: float,
+        *,
+        per_call_s: float = TRANSPORT_TIMEOUT_S,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._budget_s = float(budget_s)
+        self._per_call_s = float(per_call_s)
+        self._monotonic = monotonic
+        self._started = monotonic()
+
+    def check(self, window_seq: int) -> None:
+        elapsed = self._monotonic() - self._started
+        if elapsed + self._per_call_s > self._budget_s:
+            raise AttemptDeadlineExceeded(
+                f"stopping before window {window_seq}: {elapsed:.0f}s elapsed + up to "
+                f"{self._per_call_s:.0f}s per call exceeds the {self._budget_s:.0f}s attempt budget",
+                window_seq=window_seq,
+            )
+
+
+def attempt_budget_s(max_windows: int) -> int:
+    """The time budget for one paged attempt of a ``maxWindows`` request (see constants above)."""
+    return min(int(max_windows) * TRANSPORT_TIMEOUT_S + READ_ALLOWANCE_S, MAX_ATTEMPT_BUDGET_S)
 
 
 class ReportIncomplete(Exception):
@@ -180,11 +237,13 @@ def process_request(
     reader: BinReader,
     clock: Clock,
     attempt_ref_factory: Callable[[], str] = new_attempt_ref,
+    deadline: AttemptDeadline | None = None,
 ) -> ReportResult:
     """Read the warehouse's Bin for one request and report it to DP2 (v1 or paged).
 
-    Dispatches on ``itemWindow.maxWindows``: ``> 1`` → :func:`process_paged_request`;
-    absent or 1 → the unchanged v1 single-window path (:func:`process_v1_request`).
+    Dispatches on ``itemWindow.maxWindows``: ``> 1`` → :func:`process_paged_request` (with the
+    optional ``deadline``); absent or 1 → the unchanged v1 single-window path
+    (:func:`process_v1_request`).
     """
     if request.item_window.is_paged:
         return process_paged_request(
@@ -193,6 +252,7 @@ def process_request(
             reader=reader,
             clock=clock,
             attempt_ref_factory=attempt_ref_factory,
+            deadline=deadline,
         )
     return process_v1_request(request, client=client, reader=reader, clock=clock)
 
@@ -243,6 +303,7 @@ def process_paged_request(
     reader: BinReader,
     clock: Clock,
     attempt_ref_factory: Callable[[], str] = new_attempt_ref,
+    deadline: AttemptDeadline | None = None,
 ) -> ReportResult:
     """v1.2: one read attempt, reported as windows 0..N (``maxWindows > 1``).
 
@@ -252,7 +313,8 @@ def process_paged_request(
     last. Returns the FINAL window's result. Any transport/DP2 error propagates mid-attempt
     (the poller's retry starts a NEW attempt at window 0, which DP2 treats as a supersede).
     Raises :class:`ReportIncomplete` if DP2 acknowledged the final window with an explicit
-    ``complete: false``.
+    ``complete: false``, and :class:`AttemptDeadlineExceeded` (before sending a window) when the
+    ``deadline`` says that window's call could overrun the attempt budget.
     """
     window = request.item_window
     max_items = int(window.max_items)
@@ -276,6 +338,8 @@ def process_paged_request(
     last_seq = len(chunks) - 1
     result: ReportResult | None = None
     for seq, chunk in enumerate(chunks):
+        if deadline is not None:
+            deadline.check(seq)
         report = build_report(
             chunk,
             read_at=read_at,

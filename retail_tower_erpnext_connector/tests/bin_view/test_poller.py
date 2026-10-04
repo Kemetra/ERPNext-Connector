@@ -6,11 +6,16 @@
 ``poller`` and ``frappe_glue`` import frappe, so they are loaded against a minimal stand-in (the
 RT-39 / RT-71 pattern); the real bench run stays a deferred validation step (standing-rules §6).
 
-Covered here: a mid-attempt transport failure is retried on the NEXT tick as a fresh attempt
+Covered here: a mid-attempt transport failure is retried on a LATER tick as a fresh attempt
 (new ``attemptRef`` from window 0) even though the cursor has moved on (the stranded-run fix);
 a 409 ``window_sequence_conflict`` on a stale attempt is handled without crashing; the bounded
 give-up (``bin_view.report.incomplete_abandoned``); the paged limit refusal
-(``bin_view.window.limit_exceeded``); and the keyset page read.
+(``bin_view.window.limit_exceeded``); paged attempts handed off to a deduplicated long-queue job
+with an explicit timeout and an in-job deadline; and the keyset page read.
+
+Paged requests run in ``run_paged_report_job`` (long queue). ``_tick`` simulates the long-queue
+worker by running the jobs the tick enqueued right after it; their outcomes are folded into the
+retry set by the NEXT tick.
 """
 
 import importlib
@@ -48,9 +53,12 @@ class _Cache:
     def get_value(self, key):
         return self.values.get(key)
 
-    def set_value(self, key, value):
+    def set_value(self, key, value, **_kwargs):
         self.values[key] = value
         self.writes.append((key, self.values.get("rt_bin_view_retry")))
+
+    def delete_value(self, key):
+        self.values.pop(key, None)
 
 
 @pytest.fixture
@@ -63,6 +71,12 @@ def frappe_stub():
     fake.logger = lambda *_a, **_k: fake.log
     fake.cache_obj = _Cache()
     fake.cache = lambda: fake.cache_obj
+    fake.jobs = []  # enqueued, not yet run (i.e. "in flight")
+
+    def _enqueue(method, **kwargs):
+        fake.jobs.append({"method": method, **kwargs})
+
+    fake.enqueue = _enqueue
     sys.modules["frappe"] = fake
     yield fake
     for name in set(sys.modules) - before:
@@ -148,13 +162,29 @@ class _Clock:
         return "2026-10-04T08:00:00.000Z"
 
 
-def _tick(fake, dp2, reader):
+def _poller(fake, dp2, reader):
     poller = importlib.import_module(_POLLER)
     from retail_tower_erpnext_connector.connector.bin_view.transport import BinViewClient
 
     poller._build_bin_view_path = lambda: (BinViewClient(dp2, correlation_id="corr"), reader, _Clock())
+    poller._job_in_flight = lambda job_id: any(job["job_id"] == job_id for job in fake.jobs)
+    return poller
+
+
+def _run_jobs(fake, poller):
+    """Simulate the long-queue worker: run every enqueued paged-report job, in order."""
+    while fake.jobs:
+        job = fake.jobs.pop(0)
+        assert job["method"] == "retail_tower_erpnext_connector.connector.bin_view.poller.run_paged_report_job"
+        poller.run_paged_report_job(request_wire=job["request_wire"])
+
+
+def _tick(fake, dp2, reader, *, run_jobs=True):
+    poller = _poller(fake, dp2, reader)
     before = len(dp2.posts)
     poller.run_bin_view_poll()
+    if run_jobs:
+        _run_jobs(fake, poller)
     return dp2.posts[before:]
 
 
@@ -186,17 +216,21 @@ def test_transport_failure_on_window_1_is_retried_next_tick_as_a_fresh_attempt(f
     # The cursor moved past the page — but the request is durable in the retry set.
     assert frappe_stub.cache_obj.values["rt_bin_view_cursor"] == "c-1"
     assert _REF in _retry_state(frappe_stub)
-    (level, rec), = _events(frappe_stub, "bin_view.report.retry_scheduled")
-    assert level == "warning" and rec["failures"] == 1 and rec["request_ref"] == _REF
 
     second = _tick(frappe_stub, dp2, reader)
+    # The next tick folds the job's failure in, then hands off a fresh attempt.
+    (level, rec), = _events(frappe_stub, "bin_view.report.retry_scheduled")
+    assert level == "warning" and rec["failures"] == 1 and rec["request_ref"] == _REF
+    assert rec["reason"] == "ConnectionError"
     assert _seqs(second) == [0, 1, 2]
     assert [p["body"]["window"]["isFinal"] for p in second] == [False, False, True]
     assert len(_attempts(second)) == 1
     assert _attempts(second).isdisjoint(_attempts(first))  # a NEW attemptRef (supersede)
     assert second[0]["key"] != first[0]["key"]
+
+    assert _tick(frappe_stub, dp2, reader) == []  # the success is folded in; nothing retried
     assert len(_retry_state(frappe_stub)) == 0
-    assert dp2.gets == [None, "c-1"]  # the feed cursor is not rewound
+    assert dp2.gets == [None, "c-1", "c-1"]  # the feed cursor is not rewound
 
 
 def test_retry_state_is_saved_before_the_cursor_moves(frappe_stub):
@@ -216,11 +250,12 @@ def test_stale_attempt_409_mid_sequence_is_handled_and_retried(frappe_stub):
 
     first = _tick(frappe_stub, dp2, reader)  # must not raise
     assert _seqs(first) == [0, 1]
-    (_, rec), = _events(frappe_stub, "bin_view.report.retry_scheduled")
-    assert rec["reason"] == "window_sequence_conflict"
 
     second = _tick(frappe_stub, dp2, reader)
+    (_, rec), = _events(frappe_stub, "bin_view.report.retry_scheduled")
+    assert rec["reason"] == "window_sequence_conflict"
     assert _seqs(second) == [0, 1, 2]
+    _tick(frappe_stub, dp2, reader)
     assert len(_retry_state(frappe_stub)) == 0
 
 
@@ -230,15 +265,18 @@ def test_409_on_window_0_of_a_new_attempt_means_already_complete(frappe_stub):
     posts = _tick(frappe_stub, dp2, _Reader(1037))
     assert _seqs(posts) == [0]
     assert len(_events(frappe_stub, "bin_view.report.already_complete")) == 1
+    assert _tick(frappe_stub, dp2, _Reader(1037)) == []  # resolved on fold; nothing retried
     assert len(_retry_state(frappe_stub)) == 0
-    assert _tick(frappe_stub, dp2, _Reader(1037)) == []  # nothing retried
 
 
 def test_gives_up_after_max_retry_ticks(frappe_stub):
     dp2 = _Dp2([_page(_wire())], post_outcomes=[ConnectionError("down")] * 50)
     reader = _Reader(3)
-    for _ in range(1 + r.MAX_RETRY_TICKS):
+    # The feed attempt + MAX_RETRY_TICKS retries each run in a job; the next tick folds the last
+    # failure in and abandons it.
+    for _ in range(2 + r.MAX_RETRY_TICKS):
         _tick(frappe_stub, dp2, reader)
+    assert len(dp2.posts) == 1 + r.MAX_RETRY_TICKS
     abandoned = _events(frappe_stub, "bin_view.report.incomplete_abandoned")
     assert len(abandoned) == 1
     level, rec = abandoned[0]
@@ -250,13 +288,17 @@ def test_gives_up_after_max_retry_ticks(frappe_stub):
 def test_report_incomplete_is_retried(frappe_stub):
     dp2 = _Dp2([_page(_wire())], post_outcomes=[_Resp(201, {"complete": False})])
     _tick(frappe_stub, dp2, _Reader(3))
+    _tick(frappe_stub, dp2, _Reader(3), run_jobs=False)
     (_, rec), = _events(frappe_stub, "bin_view.report.retry_scheduled")
     assert rec["reason"] == "report_incomplete"
     assert _REF in _retry_state(frappe_stub)
 
 
 def test_one_failing_request_does_not_block_the_rest_of_the_page(frappe_stub):
-    dp2 = _Dp2([_page(_wire(_REF), _wire(_REF_2))], post_outcomes=[ConnectionError("down")])
+    dp2 = _Dp2(
+        [_page(_wire(_REF, max_windows=None), _wire(_REF_2, max_windows=None))],
+        post_outcomes=[ConnectionError("down")],
+    )
     posts = _tick(frappe_stub, dp2, _Reader(3))
     assert [p["path"].split("/")[-2] for p in posts] == [_REF, _REF_2]
     state = _retry_state(frappe_stub)
@@ -281,8 +323,10 @@ def test_limit_exceeded_reports_nothing_and_logs(frappe_stub):
     (level, rec), = _events(frappe_stub, "bin_view.window.limit_exceeded")
     assert level == "error"
     assert rec["request_ref"] == _REF and rec["limit"] == 1000 and rec["warehouse"] == "ERP-WH-1"
-    # Deterministic refusal — logged loudly, not retried.
+    # Deterministic refusal — logged loudly, resolved on the next fold, not retried.
+    assert _tick(frappe_stub, dp2, _Reader(1001)) == []
     assert len(_retry_state(frappe_stub)) == 0
+    assert len(_events(frappe_stub, "bin_view.window.limit_exceeded")) == 1
 
 
 # --- AC4 (tick level): v1 unchanged ---------------------------------------------------------------
@@ -462,3 +506,91 @@ def test_an_interrupted_final_retry_is_abandoned_without_another_attempt(frappe_
     (level, rec), = _events(frappe_stub, "bin_view.report.incomplete_abandoned")
     assert level == "error" and rec["reason"] == "retry_budget_spent" and rec["request_ref"] == _ref(0)
     assert len(_retry_state(frappe_stub)) == 0
+
+
+# --- Codex P1 on #56 (worker.py:278): paged attempts on the long queue, under a deadline ---------
+
+
+def test_paged_request_is_enqueued_on_the_long_queue_with_dedup_and_explicit_timeout(frappe_stub):
+    dp2 = _Dp2([_page(_wire(max_windows=20))])
+    assert _tick(frappe_stub, dp2, _Reader(3), run_jobs=False) == []  # nothing posted inline
+    (job,) = frappe_stub.jobs
+    assert job["method"] == "retail_tower_erpnext_connector.connector.bin_view.poller.run_paged_report_job"
+    assert job["queue"] == "long"
+    assert job["job_id"] == f"rt_bin_view_paged::{_REF}"
+    assert job["deduplicate"] is True
+    # maxWindows 20 x 30 s + 60 s read allowance = 660 s attempt budget, + 120 s job margin.
+    assert job["timeout"] == 780 < 1500
+    assert job["request_wire"] == _wire(max_windows=20)
+    # Charged and checkpointed BEFORE the hand-off.
+    assert _retry_state(frappe_stub).failures(_REF) == 1
+
+
+def test_job_timeout_is_capped_under_the_long_queue_timeout(frappe_stub):
+    dp2 = _Dp2([_page(_wire(max_windows=100))])
+    _tick(frappe_stub, dp2, _Reader(3), run_jobs=False)
+    (job,) = frappe_stub.jobs
+    assert job["timeout"] == 1200 + 120 < 1500
+
+
+def test_an_in_flight_job_is_neither_re_enqueued_nor_charged(frappe_stub):
+    dp2 = _Dp2([_page(_wire())])
+    _tick(frappe_stub, dp2, _Reader(3), run_jobs=False)
+    for _ in range(3):  # the job is still queued/running across these ticks
+        _tick(frappe_stub, dp2, _Reader(3), run_jobs=False)
+    assert len(frappe_stub.jobs) == 1
+    assert _retry_state(frappe_stub).failures(_REF) == 1
+
+
+def test_a_job_that_dies_without_an_outcome_counts_as_a_failed_attempt(frappe_stub):
+    dp2 = _Dp2([_page(_wire())])
+    _tick(frappe_stub, dp2, _Reader(3), run_jobs=False)
+    frappe_stub.jobs.clear()  # the long-queue worker was killed: no outcome was written
+    posts = _tick(frappe_stub, dp2, _Reader(3))
+    assert _retry_state(frappe_stub).failures(_REF) == 2  # charged again for the new attempt
+    assert len(posts) == 1
+
+
+class _SlowDp2(_Dp2):
+    """Every report call takes ``seconds`` on the injected monotonic clock."""
+
+    def __init__(self, pages, clock, seconds):
+        super().__init__(pages)
+        self._clock, self._seconds = clock, seconds
+
+    def post(self, path, *, json, headers):
+        self._clock["t"] += self._seconds
+        return super().post(path, json=json, headers=headers)
+
+
+def test_slow_windows_stop_at_the_deadline_without_is_final_and_counters_persist(frappe_stub):
+    clock = {"t": 0.0}
+    dp2 = _SlowDp2([_page(_wire(max_windows=20))], clock, seconds=320)
+    reader = _Reader(1037)
+    poller = _poller(frappe_stub, dp2, reader)
+    poller._monotonic = lambda: clock["t"]
+
+    poller.run_bin_view_poll()
+    _run_jobs(frappe_stub, poller)
+    # Budget 660 s: w0 (0+30), w1 (320+30) pass; w2 (640+30 > 660) is NOT sent.
+    assert _seqs(dp2.posts) == [0, 1]
+    assert not any(p["body"]["window"]["isFinal"] for p in dp2.posts)
+    (level, rec), = _events(frappe_stub, "bin_view.report.deadline_reached")
+    assert level == "warning" and rec["window_seq"] == 2
+
+    poller.run_bin_view_poll()  # next tick folds the outcome in; the counter persists
+    (_, sched), = _events(frappe_stub, "bin_view.report.retry_scheduled")
+    assert sched["reason"] == "attempt_deadline" and sched["failures"] == 1
+    assert _retry_state(frappe_stub).failures(_REF) == 2  # + the fresh attempt it just handed off
+
+
+def test_a_fast_paged_attempt_is_unchanged_under_the_deadline(frappe_stub):
+    clock = {"t": 0.0}
+    dp2 = _SlowDp2([_page(_wire(max_windows=20))], clock, seconds=1)
+    poller = _poller(frappe_stub, dp2, _Reader(1037))
+    poller._monotonic = lambda: clock["t"]
+    poller.run_bin_view_poll()
+    _run_jobs(frappe_stub, poller)
+    assert _seqs(dp2.posts) == [0, 1, 2]
+    assert [p["body"]["window"]["isFinal"] for p in dp2.posts] == [False, False, True]
+    assert _events(frappe_stub, "bin_view.report.deadline_reached") == []

@@ -84,13 +84,6 @@ def _held(n):
     return rs
 
 
-def test_due_is_bounded_and_in_order():
-    rs = _held(12)
-    assert [q.request_ref for q in rs.due()] == [_request(i).request_ref for i in range(r.MAX_RETRIES_PER_TICK)]
-    assert len(rs.due(100)) == 12
-    assert rs.due(0) == []
-
-
 def test_charge_counts_up_front_and_rotates_to_the_back():
     rs = _held(3)
     outcome = rs.charge_retry(_request(0))

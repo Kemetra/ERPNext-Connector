@@ -16,12 +16,13 @@ The set is bounded twice: an entry is abandoned after :data:`MAX_RETRY_TICKS` fa
 :data:`MAX_PENDING` requests are held at once (a failure that does not fit is abandoned at
 once, with the same log).
 
-Each tick re-attempts at most :data:`MAX_RETRIES_PER_TICK` requests (Codex P1 on #56), so a
-run of slow transports cannot push the scheduler job past its queue timeout before the state
-is saved. A retry is CHARGED before it runs (:meth:`RetrySet.charge_retry`) and the poller
-checkpoints the set before and after every attempt, so an attempt cut short by a killed
-worker still counts toward the abandon bound. Charging moves the request to the back of the
-order, so requests not reached this tick go first next tick (FIFO rotation — no starvation).
+Each tick re-attempts at most :data:`MAX_RETRIES_PER_TICK` v1 requests inline (Codex P1 on
+#56), so a run of slow transports cannot push the cron job past its queue timeout before the
+state is saved; paged requests are handed off to a long-queue job instead (see ``poller``). A
+retry is CHARGED before it runs (:meth:`RetrySet.charge_retry`) and the poller checkpoints the
+set before and after every attempt, so an attempt cut short by a killed worker still counts
+toward the abandon bound. Charging moves the request to the back of the order, so requests
+not reached this tick go first next tick (FIFO rotation — no starvation).
 
 Pure Python (NO frappe); the poller persists :meth:`RetrySet.to_state` in the frappe cache.
 The state stores each request in its pulled WIRE shape, so a stored entry survives a
@@ -40,11 +41,10 @@ from .contracts import BinViewRequest
 MAX_RETRY_TICKS = 5
 # Most requests held for retry at once (one per reconciliation run in flight).
 MAX_PENDING = 200
-# Most retries re-attempted in one tick. Frappe v15 runs this cron on the default queue (300 s job
-# timeout) and the DP2 transport times out at 30 s per call, so 5 retries of a single-window (v1 or
-# <= maxItems) report cost at most ~150 s. A paged attempt makes one call per window; the per-attempt
-# checkpoint + pre-charge keeps even a timed-out tick from losing counters or re-running the same
-# prefix forever. The rest wait for later ticks, in order.
+# Most v1 retries re-attempted inline in one tick. Frappe v15 runs this cron on the default queue
+# (300 s job timeout) and the DP2 transport times out at 30 s per call, so 5 single-call retries
+# cost at most ~150 s. Paged retries never run inline (they go to the long queue). The rest wait
+# for later ticks, in order.
 MAX_RETRIES_PER_TICK = 5
 
 QUEUED = "queued"
@@ -84,10 +84,6 @@ class RetrySet:
     def pending(self) -> list[BinViewRequest]:
         """The requests to re-attempt this tick (a snapshot; safe to mutate the set while iterating)."""
         return [request for request, _ in self._entries.values()]
-
-    def due(self, limit: int = MAX_RETRIES_PER_TICK) -> list[BinViewRequest]:
-        """The first ``limit`` requests to re-attempt this tick, in order (a snapshot)."""
-        return self.pending()[: max(int(limit), 0)]
 
     def failures(self, request_ref: str) -> int:
         entry = self._entries.get(request_ref)
