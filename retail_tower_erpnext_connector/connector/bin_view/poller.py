@@ -7,8 +7,10 @@ Registered as a ``scheduler_events`` cron in ``hooks.py``. On each tick it:
 
   1. builds the 019 client over the spec-003 auth (reuses Connector Settings
      ``dp2_base_url`` + ``dp2_token``) + the frappe-backed Bin reader + a UTC clock;
-  2. re-attempts every request in the bounded retry set (RT-176, :mod:`.retry`) — each a
-     FRESH read attempt (a paged request gets a new ``attemptRef`` from window 0);
+  2. re-attempts up to ``retry.MAX_RETRIES_PER_TICK`` requests from the bounded retry set
+     (RT-176, :mod:`.retry`), oldest first — each a FRESH read attempt (a paged request gets a
+     new ``attemptRef`` from window 0), charged and checkpointed before it runs and
+     checkpointed again after it;
   3. pulls wanted Bin-view reads (``binViewPullRequests``) page by page;
   4. for each request, reads the live ERPNext ``Bin`` for the warehouse and reports the
      snapshot (``binViewReportSnapshot``) — one report (v1) or windows 0..N (stock-view 1.2,
@@ -35,7 +37,7 @@ import frappe
 
 from ..request_id import new_request_id
 from . import worker
-from .retry import ABANDONED, RetrySet
+from .retry import ABANDONED, MAX_RETRIES_PER_TICK, RetrySet
 from .transport import BinViewClient, ReportConflict, ReportNotFound, WindowSequenceConflict
 from .worker import ReportIncomplete, WindowLimitExceeded, WindowOverflowError
 
@@ -59,10 +61,9 @@ def run_bin_view_poll() -> None:
 
     retries = RetrySet(_load_retry_state())
     attempted: set[str] = set()
-    for request in retries.pending():
+    for request in retries.due(MAX_RETRIES_PER_TICK):
         attempted.add(request.request_ref)
-        _attempt(request, client=client, reader=reader, clock=clock, retries=retries)
-    _save_retry_state(retries)
+        _retry(request, client=client, reader=reader, clock=clock, retries=retries)
 
     since: str | None = _load_cursor()
     pages = 0
@@ -72,7 +73,8 @@ def run_bin_view_poll() -> None:
             if request.request_ref in attempted:
                 continue  # already re-attempted this tick (a re-baselined feed can re-offer it)
             attempted.add(request.request_ref)
-            _attempt(request, client=client, reader=reader, clock=clock, retries=retries)
+            _attempt(request, client=client, reader=reader, clock=clock, retries=retries,
+                     on_failure=retries.record_failure)
         pages += 1
         # Retry state FIRST: a request that failed on this page must be durable before the
         # cursor moves past it, or its run is stranded (pre-RT-176 defect).
@@ -83,11 +85,35 @@ def run_bin_view_poll() -> None:
             break  # caught up — no more wanted reads
 
 
-def _attempt(request, *, client, reader, clock, retries: RetrySet) -> None:
+def _retry(request, *, client, reader, clock, retries: RetrySet) -> None:
+    """Re-attempt one retry-set request: charge it, checkpoint, attempt, checkpoint again.
+
+    The checkpoint BEFORE the attempt persists the charge (and the rotation to the back), so a
+    worker killed mid-attempt still counts the attempt and the next tick starts with the
+    requests behind it. The checkpoint AFTER persists the outcome (resolved or still queued).
+    """
+    charged = retries.charge_retry(request)
+    _save_retry_state(retries)
+    if charged.status == ABANDONED:
+        # The previous charged attempt was the last one allowed and never settled (interrupted).
+        frappe.logger(_LOGGER).error(
+            {"event": "bin_view.report.incomplete_abandoned", "request_ref": request.request_ref,
+             "warehouse": request.erpnext_warehouse_ref, "failures": charged.failures,
+             "reason": "retry_budget_spent", "detail": ""}
+        )
+        return
+    _attempt(request, client=client, reader=reader, clock=clock, retries=retries,
+             on_failure=retries.settle_failed_retry)
+    _save_retry_state(retries)
+
+
+def _attempt(request, *, client, reader, clock, retries: RetrySet, on_failure) -> None:
     """One read-and-report attempt for ``request``; classifies the outcome for the retry set.
 
-    Never raises: every outcome is either resolved (completed / terminal, logged) or recorded
-    as a failure (retried on a later tick, or abandoned once the bound is reached).
+    Never raises an ``Exception``: every outcome is either resolved (completed / terminal,
+    logged) or passed to ``on_failure`` (``RetrySet.record_failure`` for a feed request,
+    ``RetrySet.settle_failed_retry`` for an already-charged retry), which keeps it for a later
+    tick or abandons it at the bound.
     """
     ref = request.request_ref
     log = frappe.logger(_LOGGER)
@@ -104,7 +130,7 @@ def _attempt(request, *, client, reader, clock, retries: RetrySet) -> None:
             )
         else:
             # This attempt was superseded / went stale mid-sequence — retry with a fresh one.
-            _record_failure(request, retries, reason="window_sequence_conflict",
+            _record_failure(request, on_failure, reason="window_sequence_conflict",
                             detail=str(exc))
     except ReportConflict as exc:
         # Same key + a different snapshot — operator attention; never blind-retry.
@@ -133,15 +159,15 @@ def _attempt(request, *, client, reader, clock, retries: RetrySet) -> None:
              "detail": _safe(str(exc))}
         )
     except ReportIncomplete as exc:
-        _record_failure(request, retries, reason="report_incomplete", detail=str(exc))
+        _record_failure(request, on_failure, reason="report_incomplete", detail=str(exc))
     except Exception as exc:  # transport / unexpected DP2 status / read failure — retryable.
-        _record_failure(request, retries, reason=type(exc).__name__, detail=str(exc))
+        _record_failure(request, on_failure, reason=type(exc).__name__, detail=str(exc))
     else:
         retries.resolve(ref)
 
 
-def _record_failure(request, retries: RetrySet, *, reason: str, detail: str) -> None:
-    outcome = retries.record_failure(request)
+def _record_failure(request, on_failure, *, reason: str, detail: str) -> None:
+    outcome = on_failure(request)
     record = {
         "request_ref": request.request_ref,
         "warehouse": request.erpnext_warehouse_ref,

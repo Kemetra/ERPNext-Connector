@@ -124,7 +124,7 @@ class _Dp2:
         self.posts.append({"path": path, "body": json, "key": headers["Idempotency-Key"]})
         if self.post_outcomes:
             outcome = self.post_outcomes.pop(0)
-            if isinstance(outcome, Exception):
+            if isinstance(outcome, BaseException):
                 raise outcome
             return outcome
         return _Resp(201)
@@ -386,3 +386,79 @@ def test_v1_read_is_unchanged_single_query(frappe_stub):
     rows = glue.FrappeBinReader().read_bins(erpnext_warehouse_ref="ERP-WH-1", item_window=window)
     assert len(rows) == 501
     assert table.calls == [{"filters": {"warehouse": "ERP-WH-1"}, "limit": 501}]
+
+
+# --- Codex P1 on #56: bounded, checkpointed, non-starving retry drain ----------------------------
+
+
+class _WorkerKilled(BaseException):
+    """Stands in for the scheduler job being killed mid-attempt (not an ``Exception``)."""
+
+
+def _ref(i):
+    return f"{i:08d}-1111-4111-8111-111111111111"
+
+
+def _seed_retry_set(fake, n):
+    rs = r.RetrySet()
+    for i in range(n):
+        rs.record_failure(importlib.import_module(f"{_ROOT}.connector.bin_view.contracts").BinViewRequest.from_wire(
+            _wire(_ref(i), max_windows=None)
+        ))
+    fake.cache_obj.values["rt_bin_view_retry"] = rs.to_state()
+
+
+def _refs(posts):
+    return [p["path"].split("/")[-2] for p in posts]
+
+
+def test_retry_drain_is_bounded_per_tick(frappe_stub):
+    _seed_retry_set(frappe_stub, 12)
+    dp2 = _Dp2([], post_outcomes=[ConnectionError("down")] * 100)
+    posts = _tick(frappe_stub, dp2, _Reader(3))
+    assert _refs(posts) == [_ref(i) for i in range(r.MAX_RETRIES_PER_TICK)]
+    assert len(dp2.gets) == 1  # the feed is still pulled after the bounded drain
+    state = _retry_state(frappe_stub)
+    assert len(state) == 12  # nothing lost; the rest wait for later ticks
+    assert [state.failures(_ref(i)) for i in range(12)] == [2] * 5 + [1] * 7
+
+
+def test_counters_persist_when_the_worker_dies_mid_drain(frappe_stub):
+    _seed_retry_set(frappe_stub, 8)
+    dp2 = _Dp2([], post_outcomes=[ConnectionError("slow"), ConnectionError("slow"), _WorkerKilled()])
+    with pytest.raises(_WorkerKilled):
+        _tick(frappe_stub, dp2, _Reader(3))
+    assert _refs(dp2.posts) == [_ref(0), _ref(1), _ref(2)]
+    state = _retry_state(frappe_stub)
+    # The two finished attempts AND the interrupted one are counted (charged before running)...
+    assert [state.failures(_ref(i)) for i in range(8)] == [2, 2, 2, 1, 1, 1, 1, 1]
+    # ...and rotated to the back, so the next tick starts with the requests not yet reached.
+    assert [q.request_ref for q in state.pending()] == [_ref(i) for i in (3, 4, 5, 6, 7, 0, 1, 2)]
+    nxt = _tick(frappe_stub, _Dp2([], post_outcomes=[ConnectionError("down")] * 10), _Reader(3))
+    assert _refs(nxt) == [_ref(i) for i in (3, 4, 5, 6, 7)]
+
+
+def test_no_retry_is_starved_across_ticks(frappe_stub):
+    _seed_retry_set(frappe_stub, 12)
+    dp2 = _Dp2([], post_outcomes=[ConnectionError("down")] * 100)
+    reader = _Reader(3)
+    attempted = []
+    for _ in range(3):
+        attempted += _refs(_tick(frappe_stub, dp2, reader))
+    # Every request is retried once before any is retried twice (FIFO rotation).
+    assert attempted[:12] == [_ref(i) for i in range(12)]
+    assert attempted[12:] == [_ref(i) for i in range(3)]
+
+
+def test_an_interrupted_final_retry_is_abandoned_without_another_attempt(frappe_stub):
+    rs = r.RetrySet()
+    contracts = importlib.import_module(f"{_ROOT}.connector.bin_view.contracts")
+    req = contracts.BinViewRequest.from_wire(_wire(_ref(0), max_windows=None))
+    rs.record_failure(req)
+    for _ in range(r.MAX_RETRY_TICKS):
+        rs.charge_retry(req)  # the last allowed retry was charged but the worker died
+    frappe_stub.cache_obj.values["rt_bin_view_retry"] = rs.to_state()
+    assert _tick(frappe_stub, _Dp2([]), _Reader(3)) == []
+    (level, rec), = _events(frappe_stub, "bin_view.report.incomplete_abandoned")
+    assert level == "error" and rec["reason"] == "retry_budget_spent" and rec["request_ref"] == _ref(0)
+    assert len(_retry_state(frappe_stub)) == 0

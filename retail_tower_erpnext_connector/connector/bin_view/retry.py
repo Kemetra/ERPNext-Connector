@@ -16,6 +16,13 @@ The set is bounded twice: an entry is abandoned after :data:`MAX_RETRY_TICKS` fa
 :data:`MAX_PENDING` requests are held at once (a failure that does not fit is abandoned at
 once, with the same log).
 
+Each tick re-attempts at most :data:`MAX_RETRIES_PER_TICK` requests (Codex P1 on #56), so a
+run of slow transports cannot push the scheduler job past its queue timeout before the state
+is saved. A retry is CHARGED before it runs (:meth:`RetrySet.charge_retry`) and the poller
+checkpoints the set before and after every attempt, so an attempt cut short by a killed
+worker still counts toward the abandon bound. Charging moves the request to the back of the
+order, so requests not reached this tick go first next tick (FIFO rotation — no starvation).
+
 Pure Python (NO frappe); the poller persists :meth:`RetrySet.to_state` in the frappe cache.
 The state stores each request in its pulled WIRE shape, so a stored entry survives a
 connector upgrade; an entry that no longer parses is dropped.
@@ -33,6 +40,12 @@ from .contracts import BinViewRequest
 MAX_RETRY_TICKS = 5
 # Most requests held for retry at once (one per reconciliation run in flight).
 MAX_PENDING = 200
+# Most retries re-attempted in one tick. Frappe v15 runs this cron on the default queue (300 s job
+# timeout) and the DP2 transport times out at 30 s per call, so 5 retries of a single-window (v1 or
+# <= maxItems) report cost at most ~150 s. A paged attempt makes one call per window; the per-attempt
+# checkpoint + pre-charge keeps even a timed-out tick from losing counters or re-running the same
+# prefix forever. The rest wait for later ticks, in order.
+MAX_RETRIES_PER_TICK = 5
 
 QUEUED = "queued"
 ABANDONED = "abandoned"
@@ -47,7 +60,7 @@ class FailureOutcome:
 
 
 class RetrySet:
-    """Requests awaiting a fresh report attempt, in first-failure order."""
+    """Requests awaiting a fresh report attempt, oldest-charged first (FIFO rotation)."""
 
     def __init__(self, state: object = None) -> None:
         self._entries: dict[str, tuple[BinViewRequest, int]] = {}
@@ -72,6 +85,10 @@ class RetrySet:
         """The requests to re-attempt this tick (a snapshot; safe to mutate the set while iterating)."""
         return [request for request, _ in self._entries.values()]
 
+    def due(self, limit: int = MAX_RETRIES_PER_TICK) -> list[BinViewRequest]:
+        """The first ``limit`` requests to re-attempt this tick, in order (a snapshot)."""
+        return self.pending()[: max(int(limit), 0)]
+
     def failures(self, request_ref: str) -> int:
         entry = self._entries.get(request_ref)
         return 0 if entry is None else entry[1]
@@ -89,9 +106,38 @@ class RetrySet:
         ref = request.request_ref
         failures = self.failures(ref) + 1
         if self._should_abandon(ref, failures):
-            self._entries.pop(ref, None)
-            return FailureOutcome(status=ABANDONED, failures=failures)
-        self._entries[ref] = (request, failures)
+            return self._abandon(ref, failures)
+        return self._requeue(request, failures)
+
+    def charge_retry(self, request: BinViewRequest) -> FailureOutcome:
+        """Count a retry attempt BEFORE it runs and move the request to the back of the order.
+
+        Charging up front means an attempt that never returns (the worker is killed mid-attempt)
+        still uses up one retry once the poller has checkpointed the set. ``ABANDONED`` here means
+        the previous charged attempt was already the last one allowed, so it is not attempted again.
+        """
+        ref = request.request_ref
+        failures = self.failures(ref) + 1
+        if failures > MAX_RETRY_TICKS + 1:
+            return self._abandon(ref, failures)
+        return self._requeue(request, failures)
+
+    def settle_failed_retry(self, request: BinViewRequest) -> FailureOutcome:
+        """A charged retry failed: keep it (already counted and rotated) or abandon it at the bound."""
+        ref = request.request_ref
+        failures = self.failures(ref)
+        if failures > MAX_RETRY_TICKS:
+            return self._abandon(ref, failures)
+        return FailureOutcome(status=QUEUED, failures=failures)
+
+    def _abandon(self, request_ref: str, failures: int) -> FailureOutcome:
+        self._entries.pop(request_ref, None)
+        return FailureOutcome(status=ABANDONED, failures=failures)
+
+    def _requeue(self, request: BinViewRequest, failures: int) -> FailureOutcome:
+        """Store ``request`` with ``failures`` at the BACK of the order (pop + re-insert)."""
+        self._entries.pop(request.request_ref, None)
+        self._entries[request.request_ref] = (request, failures)
         return FailureOutcome(status=QUEUED, failures=failures)
 
     def _should_abandon(self, request_ref: str, failures: int) -> bool:

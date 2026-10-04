@@ -72,3 +72,50 @@ def test_state_round_trips_and_tolerates_garbage():
     assert len(r.RetrySet(state)) == 2
     assert len(r.RetrySet(None)) == 0
     assert len(r.RetrySet("not a mapping")) == 0
+
+
+# --- per-tick bound, pre-charge, FIFO rotation (Codex P1 on #56) ------------------------------
+
+
+def _held(n):
+    rs = r.RetrySet()
+    for i in range(n):
+        rs.record_failure(_request(i))
+    return rs
+
+
+def test_due_is_bounded_and_in_order():
+    rs = _held(12)
+    assert [q.request_ref for q in rs.due()] == [_request(i).request_ref for i in range(r.MAX_RETRIES_PER_TICK)]
+    assert len(rs.due(100)) == 12
+    assert rs.due(0) == []
+
+
+def test_charge_counts_up_front_and_rotates_to_the_back():
+    rs = _held(3)
+    outcome = rs.charge_retry(_request(0))
+    assert outcome == r.FailureOutcome(status=r.QUEUED, failures=2)
+    assert [q.request_ref for q in rs.pending()] == [_request(i).request_ref for i in (1, 2, 0)]
+
+
+def test_charged_retries_abandon_at_the_same_bound_as_before():
+    rs = _held(1)
+    req = _request(0)
+    for retry in range(1, r.MAX_RETRY_TICKS + 1):
+        assert rs.charge_retry(req).status == r.QUEUED
+        outcome = rs.settle_failed_retry(req)
+        if retry < r.MAX_RETRY_TICKS:
+            assert outcome == r.FailureOutcome(status=r.QUEUED, failures=retry + 1)
+    # The MAX_RETRY_TICKS-th failed retry abandons — same as record_failure counting.
+    assert outcome == r.FailureOutcome(status=r.ABANDONED, failures=r.MAX_RETRY_TICKS + 1)
+    assert req.request_ref not in rs
+
+
+def test_an_interrupted_last_retry_is_abandoned_on_the_next_charge():
+    rs = _held(1)
+    req = _request(0)
+    for _ in range(r.MAX_RETRY_TICKS):
+        rs.charge_retry(req)  # charged, never settled (worker killed mid-attempt)
+    assert rs.failures(req.request_ref) == r.MAX_RETRY_TICKS + 1
+    assert rs.charge_retry(req) == r.FailureOutcome(status=r.ABANDONED, failures=r.MAX_RETRY_TICKS + 2)
+    assert req.request_ref not in rs
