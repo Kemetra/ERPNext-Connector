@@ -321,7 +321,8 @@ def _resolve_original_invoice(work_item: PostingWorkItem) -> str | None:
     ``(reversal_of.source_system, reversal_of.external_id)`` — the 012 ``reversalOf`` anchor, which
     is the original sale's ``(sourceSystem, externalId)``, NOT this reversal work-item's own id.
     Returns the original SI's ERPNext docname for ``return_against``, or None if none is found
-    (the caller fails closed — never post a reversal against a sale that was never posted).
+    (the caller never posts a reversal against a sale that was never posted — RT-172: it acks
+    ``failed_transient`` so DP2 re-offers it once the original posts).
     """
     if work_item.reversal_of is None:  # an upstream contract violation for kind=reversal.
         return None
@@ -353,8 +354,9 @@ def _post_reversal(
     environment (no Frappe bench; standing-rules §6). It mirrors the sale_post path exactly:
     replay-guard → build (pure ``build_reversing_invoice``) → resolve original for return_against →
     ``insert().submit()`` → record_posted → ack ``posted``; transient/validation/dup/other handling
-    mirrors the forward path; an unresolvable original sale fails CLOSED (Principle VI — never post a
-    reversal against a sale that was never posted). Idempotency reuses the SAME ``store`` replay
+    mirrors the forward path; a reversal whose original sale has no submitted invoice YET is never
+    posted (Principle VI) — RT-172 acks it ``failed_transient`` so DP2 re-offers it within its retry
+    budget, instead of rejecting a reversal that only arrived before its original. Idempotency reuses the SAME ``store`` replay
     primitive but keyed on the reversal work-item's ``(source_system, work_item_ref)`` (Connector
     #28 re-key via :func:`key_for` — the top-level ``external_id`` on a reversal is the ORIGINAL
     sale's id and would collide with its replay slot). No new primitive (Arc A §4); a
@@ -410,19 +412,36 @@ def _post_reversal(
     except Exception as exc:  # any other build error is non-retryable — never let it escape.
         return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
 
-    # Resolve the original SI for `return_against`. Fail CLOSED if the reversed sale was never
-    # posted (no submitted forward SI) — posting a reversal against a non-existent sale would be a
-    # silent inconsistency (Principle VI). The pure builder cannot do this lookup (no DB hit there),
-    # so it is applied here, on the bench leg, before insert.
-    original_name = _resolve_original_invoice(work_item)
-    if original_name is None:
+    # Resolve the original SI for `return_against`. The pure builder cannot do this lookup (no DB
+    # hit there), so it is applied here, on the bench leg, before insert. A reversal work-item with
+    # no `reversalOf` is an upstream contract violation — rejected as validation, never re-offered.
+    if work_item.reversal_of is None:
         return _reject(
             client,
             work_item,
             correlation_id,
             FailureKind.VALIDATION,
-            "reversal targets a sale with no submitted Sales Invoice (return_against unresolved)",
+            "reversal work-item carries no reversalOf (return_against unresolvable)",
         )
+    original_name = _resolve_original_invoice(work_item)
+    if original_name is None:
+        # RT-172 — the reversed sale has no submitted Sales Invoice YET (e.g. its own posting is
+        # still pending or retrying). Posting against it would be a silent inconsistency (Principle
+        # VI), but rejecting it would strand a reversal that merely arrived first. Nothing is built
+        # into ERPNext: ack `failed_transient` (per-offer key, RT-171) so DP2 re-offers it; DP2's
+        # POSTING_RETRY_BUDGET bounds the wait and ends it as retry_budget_exhausted, not validation.
+        client.ack_outcome(
+            work_item.work_item_ref,
+            OutcomeAckRequest.failed_transient(),
+            idempotency_key=_ack_key(work_item, "failed_transient"),
+        )
+        _log_signal(
+            "posting.reversal.awaiting_original",
+            work_item,
+            correlation_id,
+            reversal_kind=work_item.reversal_of.reversal_kind,
+        )
+        return "failed_transient"
     doc_payload["return_against"] = original_name
 
     # RT-49 (decision 10312) — ERPNext rejects a return timestamped EARLIER than its original. An

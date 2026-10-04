@@ -13,6 +13,12 @@ byte-identical to before.
 ``frappe_glue`` imports frappe, so it is loaded against a minimal stand-in (the RT-71 / RT-78
 pattern). The stand-in's Sales Invoice raises ``TimeoutError`` (always a transient) on insert while
 ``fake.transient`` is set, and the stand-in can hold an ORIGINAL invoice for the reversal leg.
+
+RT-172 — a reversal whose original sale has no submitted invoice YET acks ``failed_transient`` with
+that per-offer key (signal ``posting.reversal.awaiting_original``), inserts nothing, and posts with
+``return_against`` once the original exists. It never acks ``validation`` for that case: DP2's
+retry budget ends it as ``retry_budget_exhausted``. A reversal with no ``reversalOf`` at all is still
+``permanently_rejected / validation``.
 """
 
 import datetime
@@ -261,3 +267,58 @@ class TestTerminalAckKeysUnchanged:
 		_outcome, client, _store = _post(load_glue(_Frappe()), _sale_post(10, unit="crate"))
 		assert client.acks[0]["ack"]["outcome"] == "permanently_rejected"
 		assert client.acks[0]["key"] == f"{_SALE_REF}:permanently_rejected"
+
+
+class TestReversalAwaitsOriginal:
+	@pytest.mark.parametrize("kind", ["void", "return"])
+	def test_reversal_before_its_original_waits_then_posts_against_it(self, load_glue, kind):
+		fake = _Frappe()  # the original sale has no submitted invoice yet
+		glue = load_glue(fake)
+		client = _Client()
+
+		assert _post(glue, _reversal(kind, 11), client)[0] == "failed_transient"
+		assert client.acks == [{"ref": _REVERSAL_REF, "ack": {"outcome": "failed_transient"},
+			"key": f"{_REVERSAL_REF}:failed_transient:11"}]
+		assert fake.payloads == [] and fake.events == []  # nothing built into ERPNext, no insert
+		(signal,) = [r for r in fake._logger.records if r["event"] == "posting.reversal.awaiting_original"]
+		assert signal["work_item_ref"] == _REVERSAL_REF and signal["reversal_kind"] == kind
+
+		fake.originals[_ORIGINAL_EXTERNAL_ID] = _ORIGINAL  # the original sale posts
+		assert _post(glue, _reversal(kind, 13), client)[0] == "posted"
+		assert client.acks[1]["key"] == f"{_REVERSAL_REF}:posted"
+		(payload,) = fake.payloads
+		assert payload["return_against"] == _ORIGINAL and payload["is_return"] == 1
+		assert fake.events == ["savepoint", "insert", "submit"]
+
+	def test_never_acks_validation_while_waiting(self, load_glue):
+		# DP2 owns the budget (POSTING_RETRY_BUDGET): every offer the connector sees is a transient,
+		# each under its own key, so the end state is retry_budget_exhausted — never validation.
+		fake = _Frappe()
+		glue = load_glue(fake)
+		client = _Client()
+		cursors = [11, 13, 15, 17, 19]
+		for cursor in cursors:
+			assert _post(glue, _reversal("void", cursor), client)[0] == "failed_transient"
+		assert {a["ack"]["outcome"] for a in client.acks} == {"failed_transient"}
+		assert [a["key"] for a in client.acks] == [f"{_REVERSAL_REF}:failed_transient:{n}" for n in cursors]
+		assert fake.payloads == []
+
+	def test_reversal_without_reversal_of_is_still_a_validation_rejection(self, load_glue):
+		wi = _reversal("void", 11)
+		malformed = c.PostingWorkItem(
+			work_item_ref=wi.work_item_ref,
+			kind=wi.kind,
+			source_system=wi.source_system,
+			external_id=wi.external_id,
+			payload_hash=wi.payload_hash,
+			business_date=wi.business_date,
+			sale=wi.sale,
+			item_cursor=wi.item_cursor,
+			reversal_of=None,
+		)
+		fake = _Frappe(originals={_ORIGINAL_EXTERNAL_ID: _ORIGINAL})
+		outcome, client, _store = _post(load_glue(fake), malformed)
+		assert outcome == "permanently_rejected"
+		assert client.acks[0]["ack"]["reason"]["category"] == "validation"
+		assert client.acks[0]["key"] == f"{_REVERSAL_REF}:permanently_rejected"
+		assert fake.payloads == []
