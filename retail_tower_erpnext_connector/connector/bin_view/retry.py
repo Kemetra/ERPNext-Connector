@@ -88,11 +88,19 @@ class RetrySet:
         """
         ref = request.request_ref
         failures = self.failures(ref) + 1
-        if failures > MAX_RETRY_TICKS or (ref not in self._entries and len(self._entries) >= MAX_PENDING):
+        if self._should_abandon(ref, failures):
             self._entries.pop(ref, None)
             return FailureOutcome(status=ABANDONED, failures=failures)
         self._entries[ref] = (request, failures)
         return FailureOutcome(status=QUEUED, failures=failures)
+
+    def _should_abandon(self, request_ref: str, failures: int) -> bool:
+        """Abandon once the retry budget is spent, or when a NEW request finds the set full."""
+        return failures > MAX_RETRY_TICKS or self._is_full_for(request_ref)
+
+    def _is_full_for(self, request_ref: str) -> bool:
+        """True when ``request_ref`` is not held yet and the set is already at ``MAX_PENDING``."""
+        return request_ref not in self._entries and len(self._entries) >= MAX_PENDING
 
     def to_state(self) -> dict[str, dict[str, object]]:
         """A plain, cache-storable form (round-trips through the constructor)."""

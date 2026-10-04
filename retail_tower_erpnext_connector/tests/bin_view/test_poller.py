@@ -321,17 +321,22 @@ class _BinTable:
         ] + [{"item_code": "OTHER", "warehouse": "ERP-WH-2", "actual_qty": 1.0, "stock_uom": "Nos"}]
         self.calls = []
 
-    def get_all(self, doctype, *, filters, fields, order_by, limit):
-        assert doctype == "Bin" and order_by == "item_code asc"
+    def get_all(self, doctype, **query):
+        """``frappe.get_all("Bin", filters=..., fields=..., order_by=..., limit=...)`` stand-in."""
+        assert doctype == "Bin" and query["order_by"] == "item_code asc"
+        fields = query["fields"]
         assert "valuation_rate" not in fields and "stock_value" not in fields
-        self.calls.append({"filters": dict(filters), "limit": limit})
+        self.calls.append({"filters": dict(query["filters"]), "limit": query["limit"]})
+        rows = sorted(self._matching(query["filters"]), key=lambda row: row["item_code"])
+        return [{f: row[f] for f in fields} for row in rows[: query["limit"]]]
+
+    def _matching(self, filters):
         rows = [row for row in self.rows if row["warehouse"] == filters["warehouse"]]
-        if "item_code" in filters:
-            op, bound = filters["item_code"]
-            assert op == ">"
-            rows = [row for row in rows if row["item_code"] > bound]
-        rows.sort(key=lambda row: row["item_code"])
-        return [{f: row[f] for f in fields} for row in rows[:limit]]
+        if "item_code" not in filters:
+            return rows
+        op, bound = filters["item_code"]
+        assert op == ">"
+        return [row for row in rows if row["item_code"] > bound]
 
 
 def _glue(frappe_stub, table):

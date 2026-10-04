@@ -100,45 +100,69 @@ def _run(bins, request, transport=None):
 # --- AC1: 1,037 rows, maxWindows 20 → 3 windows -----------------------------------------
 
 
-def test_1037_rows_report_three_windows_in_order_one_attempt_one_read_at():
-    result, transport, reader = _run(_bins(1037), _request())
+def _windows(transport):
+    return [p["body"]["window"] for p in transport.posted]
 
-    assert result.recorded is True
-    assert len(transport.posted) == 3
-    windows = [p["body"]["window"] for p in transport.posted]
-    assert [win["windowSeq"] for win in windows] == [0, 1, 2]
-    assert [win["isFinal"] for win in windows] == [False, False, True]
-    attempt = {win["attemptRef"] for win in windows}
-    assert len(attempt) == 1
-    attempt_ref = attempt.pop()
+
+def _entries(transport):
+    return [e for p in transport.posted for e in p["body"]["entries"]]
+
+
+def _assert_one_attempt_in_order(transport, *, sizes):
+    """Windows 0..N in order, isFinal on N only, one uuid4 attemptRef + one readAt; returns it."""
+    windows = _windows(transport)
+    last = len(sizes) - 1
+    assert [win["windowSeq"] for win in windows] == list(range(len(sizes)))
+    assert [win["isFinal"] for win in windows] == [seq == last for seq in range(len(sizes))]
+    assert [len(p["body"]["entries"]) for p in transport.posted] == sizes
+    attempt_refs = {win["attemptRef"] for win in windows}
+    assert len(attempt_refs) == 1
+    attempt_ref = attempt_refs.pop()
     assert uuid.UUID(attempt_ref).version == 4
     assert {p["body"]["readAt"] for p in transport.posted} == {_READ_AT}
-    assert [len(p["body"]["entries"]) for p in transport.posted] == [500, 500, 37]
+    return attempt_ref
 
-    # Disjoint, complete coverage of the warehouse.
-    names = [e["erpnextItemRef"]["name"] for p in transport.posted for e in p["body"]["entries"]]
-    assert len(names) == len(set(names)) == 1037
-    assert names == [f"ITEM-{i:05d}" for i in range(1037)]
 
-    # Exact-decimal STRING quantities, no valuation keys.
-    for p in transport.posted:
-        for e in p["body"]["entries"]:
-            assert isinstance(e["quantity"], str)
-            assert set(e) == {"erpnextItemRef", "quantity", "stockUom"}
-    first = transport.posted[0]["body"]["entries"][0]
-    assert first["quantity"] == "0.250000"
-    last = transport.posted[2]["body"]["entries"][-1]
-    assert Decimal(last["quantity"]) == Decimal("1036.25")
+def _assert_disjoint_and_complete(transport, n):
+    names = [e["erpnextItemRef"]["name"] for e in _entries(transport)]
+    assert len(names) == len(set(names)) == n
+    assert names == [f"ITEM-{i:05d}" for i in range(n)]
 
-    # Per-window keys + the request's path.
-    assert [p["key"] for p in transport.posted] == [f"binview-{_REF}-{attempt_ref}-w{s}" for s in range(3)]
+
+def _assert_exact_decimal_entries(transport):
+    """Exact-decimal STRING quantities and no valuation keys on any entry."""
+    entries = _entries(transport)
+    assert all(isinstance(e["quantity"], str) for e in entries)
+    assert all(set(e) == {"erpnextItemRef", "quantity", "stockUom"} for e in entries)
+
+
+def _assert_window_keys_and_path(transport, attempt_ref):
+    keys = [p["key"] for p in transport.posted]
+    assert keys == [f"binview-{_REF}-{attempt_ref}-w{seq}" for seq in range(len(keys))]
     assert {p["path"] for p in transport.posted} == {
         f"/api/connector/v1/erpnext/bin-view-requests/{_REF}/snapshot"
     }
 
+
+def test_1037_rows_report_three_windows_in_order_one_attempt_one_read_at():
+    result, transport, reader = _run(_bins(1037), _request())
+
+    assert result.recorded is True
+    attempt_ref = _assert_one_attempt_in_order(transport, sizes=[500, 500, 37])
+    _assert_disjoint_and_complete(transport, 1037)
+    _assert_window_keys_and_path(transport, attempt_ref)
     # ONE paged read attempt, asking for limit + 1 rows in maxItems pages; v1 read not used.
     assert reader.paged_calls == [("ERP-WH-1", 500, 20 * 500 + 1)]
     assert reader.v1_calls == []
+
+
+def test_1037_rows_quantities_are_exact_decimal_strings():
+    _, transport, _ = _run(_bins(1037), _request())
+
+    _assert_exact_decimal_entries(transport)
+    entries = _entries(transport)
+    assert entries[0]["quantity"] == "0.250000"
+    assert Decimal(entries[-1]["quantity"]) == Decimal("1036.25")
 
 
 def test_each_attempt_gets_a_fresh_attempt_ref():
