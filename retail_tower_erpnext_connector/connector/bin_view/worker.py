@@ -112,9 +112,13 @@ class AttemptDeadline:
         self._monotonic = monotonic
         self._started = monotonic()
 
+    def allows_call(self) -> bool:
+        """True while one more call (``per_call_s``) still fits the budget."""
+        return self._monotonic() - self._started + self._per_call_s <= self._budget_s
+
     def check(self, window_seq: int) -> None:
-        elapsed = self._monotonic() - self._started
-        if elapsed + self._per_call_s > self._budget_s:
+        if not self.allows_call():
+            elapsed = self._monotonic() - self._started
             raise AttemptDeadlineExceeded(
                 f"stopping before window {window_seq}: {elapsed:.0f}s elapsed + up to "
                 f"{self._per_call_s:.0f}s per call exceeds the {self._budget_s:.0f}s attempt budget",

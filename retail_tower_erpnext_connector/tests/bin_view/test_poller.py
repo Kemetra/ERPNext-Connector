@@ -239,8 +239,8 @@ def test_retry_state_is_saved_before_the_cursor_moves(frappe_stub):
     dp2 = _Dp2([_page(_wire())], post_outcomes=[ConnectionError("down")])
     _tick(frappe_stub, dp2, _Reader(3))
     cursor_writes = [state for key, state in frappe_stub.cache_obj.writes if key == "rt_bin_view_cursor"]
-    assert len(cursor_writes) == 1
-    assert _REF in r.RetrySet(cursor_writes[0])
+    assert len(cursor_writes) == 2  # past the request (its itemCursor), then past the page
+    assert all(_REF in r.RetrySet(state) for state in cursor_writes)
 
 
 def test_stale_attempt_409_mid_sequence_is_handled_and_retried(frappe_stub):
@@ -460,7 +460,7 @@ def test_retry_drain_is_bounded_per_tick(frappe_stub):
     _seed_retry_set(frappe_stub, 12)
     dp2 = _Dp2([], post_outcomes=[ConnectionError("down")] * 100)
     posts = _tick(frappe_stub, dp2, _Reader(3))
-    assert _refs(posts) == [_ref(i) for i in range(r.MAX_RETRIES_PER_TICK)]
+    assert _refs(posts) == [_ref(i) for i in range(5)]  # poller.MAX_INLINE_ATTEMPTS_PER_TICK
     assert len(dp2.gets) == 1  # the feed is still pulled after the bounded drain
     state = _retry_state(frappe_stub)
     assert len(state) == 12  # nothing lost; the rest wait for later ticks
@@ -594,3 +594,101 @@ def test_a_fast_paged_attempt_is_unchanged_under_the_deadline(frappe_stub):
     assert _seqs(dp2.posts) == [0, 1, 2]
     assert [p["body"]["window"]["isFinal"] for p in dp2.posts] == [False, False, True]
     assert _events(frappe_stub, "bin_view.report.deadline_reached") == []
+
+
+# --- Codex P1 on #56 (poller.py:123): new v1 feed attempts share the bounded, checkpointed budget --
+
+
+class _FeedDp2(_Dp2):
+    """A keyset feed over ``wires`` (ordered by itemCursor) that honors ``since`` like Backend-Core."""
+
+    def __init__(self, wires, post_outcomes=None, clock=None, seconds_per_call=0):
+        super().__init__([], post_outcomes)
+        self.wires = sorted(wires, key=lambda w: w["itemCursor"])
+        self._clock, self._seconds = clock, seconds_per_call
+        self.call_starts = []
+
+    def _spend(self):
+        if self._clock is not None:
+            self.call_starts.append(self._clock["t"])
+            self._clock["t"] += self._seconds
+
+    def get(self, path, *, params, headers):
+        self._spend()
+        since = params.get("since")
+        self.gets.append(since)
+        items = [w for w in self.wires if since is None or w["itemCursor"] > since][: params["limit"]]
+        cursor = items[-1]["itemCursor"] if items else (since or "c-0")
+        token = cursor if len(items) == params["limit"] else None
+        return {"items": items, "cursor": cursor, "next_page_token": token}
+
+    def post(self, path, *, json, headers):
+        self._spend()
+        return super().post(path, json=json, headers=headers)
+
+
+def _v1_wires(n):
+    return [_wire(_ref(i), max_windows=None) for i in range(n)]
+
+
+def _post_counts(dp2):
+    counts = {}
+    for ref in _refs(dp2.posts):
+        counts[ref] = counts.get(ref, 0) + 1
+    return counts
+
+
+def test_a_page_of_more_v1_requests_than_the_budget_is_processed_across_ticks(frappe_stub):
+    dp2 = _FeedDp2(_v1_wires(12))
+    reader = _Reader(3)
+    per_tick = [_refs(_tick(frappe_stub, dp2, reader)) for _ in range(3)]
+    assert per_tick == [[_ref(i) for i in range(0, 5)], [_ref(i) for i in range(5, 10)], [_ref(10), _ref(11)]]
+    # The cursor stopped right after the last processed request each time.
+    assert dp2.gets == [None, _ref(4), _ref(9)]
+    assert frappe_stub.cache_obj.values["rt_bin_view_cursor"] == _ref(11)
+    assert _post_counts(dp2) == {_ref(i): 1 for i in range(12)}  # none lost, none twice
+    assert len(_retry_state(frappe_stub)) == 0
+
+
+def test_inline_budget_is_shared_between_retries_and_new_feed_requests(frappe_stub):
+    _seed_retry_set(frappe_stub, 3)  # refs 0..2 held for retry
+    dp2 = _FeedDp2([_wire(_ref(i), max_windows=None) for i in range(10, 16)])
+    posts = _tick(frappe_stub, dp2, _Reader(3))
+    # 3 retries + 2 new feed requests = the 5 inline attempts of one tick.
+    assert _refs(posts) == [_ref(0), _ref(1), _ref(2), _ref(10), _ref(11)]
+    assert frappe_stub.cache_obj.values["rt_bin_view_cursor"] == _ref(11)
+
+
+def test_tick_time_budget_stops_slow_calls_before_the_cron_timeout(frappe_stub):
+    clock = {"t": 0.0}
+    dp2 = _FeedDp2(_v1_wires(12), clock=clock, seconds_per_call=50)
+    poller = _poller(frappe_stub, dp2, _Reader(3))
+    poller._monotonic = lambda: clock["t"]
+    poller.run_bin_view_poll()
+    # GET at 0, POSTs at 50/100/150/200; the next would start at 250 (250 + 30 > 240): not started,
+    # although the attempt count (5) is not yet spent.
+    assert dp2.call_starts == [0, 50, 100, 150, 200]
+    assert all(start + 30 <= 240 for start in dp2.call_starts)
+    assert _refs(dp2.posts) == [_ref(i) for i in range(4)]
+    assert frappe_stub.cache_obj.values["rt_bin_view_cursor"] == _ref(3)
+    assert len(_events(frappe_stub, "bin_view.poll.budget_exhausted")) == 1
+
+
+def test_a_crash_mid_page_keeps_completed_outcomes_and_never_double_counts(frappe_stub):
+    dp2 = _FeedDp2(_v1_wires(8), post_outcomes=[_Resp(201), _Resp(201), _WorkerKilled()])
+    reader = _Reader(3)
+    with pytest.raises(_WorkerKilled):
+        _tick(frappe_stub, dp2, reader)
+    # ref 0 and 1 completed; the cursor passed exactly them. ref 2 was charged BEFORE its call.
+    assert frappe_stub.cache_obj.values["rt_bin_view_cursor"] == _ref(1)
+    state = _retry_state(frappe_stub)
+    assert [q.request_ref for q in state.pending()] == [_ref(2)]
+    assert state.failures(_ref(2)) == 1
+
+    nxt = _tick(frappe_stub, dp2, reader)
+    # ref 2 is retried by the drain (not again as a new feed request); the feed resumes after ref 1.
+    assert _refs(nxt) == [_ref(2), _ref(3), _ref(4), _ref(5), _ref(6)]
+    _tick(frappe_stub, dp2, reader)
+    counts = _post_counts(dp2)
+    assert counts == {**{_ref(i): 1 for i in range(8)}, _ref(2): 2}  # the killed call + one retry
+    assert len(_retry_state(frappe_stub)) == 0

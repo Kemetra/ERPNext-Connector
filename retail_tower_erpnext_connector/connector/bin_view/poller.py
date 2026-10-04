@@ -10,12 +10,19 @@ queue, 300 s job timeout). On each tick it:
      ``dp2_base_url`` + ``dp2_token``) + the frappe-backed Bin reader + a UTC clock;
   2. folds in the outcomes that finished paged-report jobs left behind (see below);
   3. drains the bounded retry set (RT-176, :mod:`.retry`), oldest first: a v1 request is
-     re-attempted inline (at most ``retry.MAX_RETRIES_PER_TICK`` per tick, each charged and
-     checkpointed before it runs and checkpointed again after it); a paged request is handed
-     off to a long-queue job (cheap — no network);
-  4. pulls wanted Bin-view reads (``binViewPullRequests``) page by page; v1 requests are read
-     and reported inline (one report, v1 key), paged requests (``maxWindows > 1``) are handed
-     off.
+     re-attempted inline (charged and checkpointed before it runs, checkpointed again after);
+     a paged request is handed off to a long-queue job (cheap — no network);
+  4. pulls wanted Bin-view reads (``binViewPullRequests``) page by page; a new v1 request is
+     charged into the retry set, checkpointed, then read and reported inline (one report, v1
+     key); a paged request (``maxWindows > 1``) is handed off. The cursor advances request by
+     request (to its ``itemCursor``) and only past a request whose outcome is durable.
+
+INLINE WORK IS BOUNDED (Codex P1s on #56). All inline v1 attempts of a tick — retries and new
+feed requests COMBINED — share :data:`MAX_INLINE_ATTEMPTS_PER_TICK` (5 x 30 s transport
+timeout), and no DP2 call (pull or attempt) starts once ``elapsed + 30 s`` would pass
+:data:`_TICK_BUDGET_S` (240 s), so the tick stays under Frappe v15's 300 s default-queue
+timeout. When the budget runs out mid-page, the rest of the page is left for the next tick: the
+cursor stays before the first unprocessed request, so nothing is skipped or processed twice.
 
 PAGED REPORTS RUN OFF THE CRON QUEUE (Codex P1s on #56). One paged attempt makes one DP2 call
 per window (up to ``maxWindows``, 30 s transport timeout each), which can outlast the cron's
@@ -60,7 +67,7 @@ import frappe
 from ..request_id import new_request_id
 from . import worker
 from .contracts import BinViewRequest
-from .retry import ABANDONED, MAX_RETRIES_PER_TICK, RetrySet
+from .retry import ABANDONED, RetrySet
 from .transport import BinViewClient, ReportConflict, ReportNotFound, WindowSequenceConflict
 from .worker import (
     AttemptDeadline,
@@ -85,6 +92,12 @@ _JOB_QUEUE = "long"
 _JOB_TIMEOUT_MARGIN_S = 120
 # The attempt deadline's clock (a module attribute so tests can drive it deterministically).
 _monotonic = time.monotonic
+# Inline v1 attempts (new feed requests + retries, combined) one cron tick may start: one DP2
+# report call each, 30 s transport timeout -> at most ~150 s.
+MAX_INLINE_ATTEMPTS_PER_TICK = 5
+# No DP2 call (pull or inline attempt) starts once elapsed + 30 s would pass this; it keeps
+# the whole tick under Frappe v15's 300 s default-queue timeout.
+_TICK_BUDGET_S = 240
 
 
 @dataclass(frozen=True)
@@ -94,6 +107,49 @@ class _Outcome:
     resolved: bool
     reason: str = ""
     detail: str = ""
+
+
+class _TickBudget:
+    """The cron tick's bound on INLINE network work (Codex P1s on #56).
+
+    Frappe v15 runs the cron on the default queue (300 s job timeout) and every DP2 call has a
+    30 s transport timeout. A tick therefore (a) starts at most :data:`MAX_INLINE_ATTEMPTS_PER_TICK`
+    inline v1 attempts (new feed requests and retries COMBINED; one report call each) and (b)
+    starts no DP2 call — pull or inline attempt — once ``elapsed + 30 s`` would pass
+    :data:`_TICK_BUDGET_S`. Paged attempts never run inline (long-queue jobs).
+    """
+
+    def __init__(self) -> None:
+        self._attempts = MAX_INLINE_ATTEMPTS_PER_TICK
+        self._clock = AttemptDeadline(_TICK_BUDGET_S, monotonic=_monotonic)
+        self.exhausted = False
+
+    def can_call(self) -> bool:
+        """Time check only: pulls (and paged hand-offs) continue after the attempt count is spent."""
+        allowed = self._clock.allows_call()
+        self.exhausted = self.exhausted or not allowed
+        return allowed
+
+    def take_attempt(self) -> bool:
+        if self._attempts <= 0:
+            self.exhausted = True
+            return False
+        if not self.can_call():
+            return False
+        self._attempts -= 1
+        return True
+
+
+@dataclass
+class _Tick:
+    """One cron tick's working set."""
+
+    client: object
+    reader: object
+    clock: object
+    retries: RetrySet
+    budget: _TickBudget
+    attempted: set
 
 
 def run_bin_view_poll() -> None:
@@ -109,44 +165,94 @@ def run_bin_view_poll() -> None:
     retries = RetrySet(_load_retry_state())
     _fold_job_outcomes(retries)
     _save_retry_state(retries)
-    attempted = _drain_retries(retries, client=client, reader=reader, clock=clock)
+    tick = _Tick(client, reader, clock, retries, _TickBudget(), set())
+    _drain_retries(tick)
+    _drain_feed(tick)
+    if tick.budget.exhausted:
+        frappe.logger(_LOGGER).info(
+            {"event": "bin_view.poll.budget_exhausted", "retries_held": len(retries)}
+        )
 
+
+def _drain_retries(tick: _Tick) -> None:
+    """Hand off every paged retry; re-attempt v1 retries inline while the tick budget allows."""
+    for request in tick.retries.pending():
+        if request.item_window.is_paged:
+            tick.attempted.add(request.request_ref)
+            _hand_off(request, tick.retries)
+        elif tick.budget.take_attempt():
+            tick.attempted.add(request.request_ref)
+            _retry_inline(tick, request)
+
+
+def _drain_feed(tick: _Tick) -> None:
+    """Pull pages while the tick budget allows; the cursor only ever passes durable outcomes.
+
+    After each request the cursor moves to that request's ``itemCursor`` (the contract's
+    "advanced cursor after this request item, <= the page cursor"); after a whole page, to the
+    page ``cursor``. A request is only passed once its outcome is durable: resolved, charged into
+    the (already saved) retry set, handed off, or held by the retry set already.
+    """
     since: str | None = _load_cursor()
-    pages = 0
-    while pages < _MAX_PAGES_PER_TICK:
-        page = client.pull_requests(since=since)
-        for request in page.items:
-            if request.request_ref in attempted:
-                continue  # already handled this tick (a re-baselined feed can re-offer it)
-            attempted.add(request.request_ref)
-            _handle_feed_request(request, client=client, reader=reader, clock=clock,
-                                 retries=retries)
-        pages += 1
-        # Retry state FIRST: a request that failed on this page must be durable before the
-        # cursor moves past it, or its run is stranded (pre-RT-176 defect).
-        _save_retry_state(retries)
+    for _ in range(_MAX_PAGES_PER_TICK):
+        if not tick.budget.can_call():
+            return
+        page = tick.client.pull_requests(since=since)
+        if not _process_page(tick, page):
+            return  # out of budget mid-page — the rest of the page waits for the next tick
+        _save_retry_state(tick.retries)
         _save_cursor(page.cursor)
         since = page.cursor
         if page.next_page_token is None:
-            break  # caught up — no more wanted reads
+            return  # caught up — no more wanted reads
 
 
-def _drain_retries(retries: RetrySet, *, client, reader, clock) -> set[str]:
-    """Hand off every paged retry; re-attempt at most ``MAX_RETRIES_PER_TICK`` v1 retries inline.
+def _process_page(tick: _Tick, page) -> bool:
+    """Handle the page's requests in order; False when the budget stops it before one of them."""
+    for request in page.items:
+        if not _handle_feed_request(tick, request):
+            return False
+        # Retry state is saved by every path that changes it, so this request's outcome is
+        # durable before the cursor passes it (no stranded run, no double count).
+        _save_cursor(request.item_cursor)
+    return True
 
-    Returns the request refs handled this tick (so a re-offer from the feed is skipped).
+
+def _handle_feed_request(tick: _Tick, request) -> bool:
+    """One new feed request; False = no inline budget left (left unprocessed, cursor before it)."""
+    ref = request.request_ref
+    if ref in tick.attempted or ref in tick.retries:
+        return True  # handled this tick, or owned by the retry drain — never processed twice
+    if request.item_window.is_paged:
+        tick.attempted.add(ref)
+        _hand_off(request, tick.retries)
+        return True
+    if not tick.budget.take_attempt():
+        return False
+    tick.attempted.add(ref)
+    _attempt_new_inline(tick, request)
+    return True
+
+
+def _attempt_new_inline(tick: _Tick, request) -> None:
+    """A new v1 request: charge it into the retry set (checkpointed) BEFORE the network call.
+
+    A worker killed mid-attempt then leaves it durably held for a retry. If the retry set is
+    full it is attempted uncharged, as before, and a failure is abandoned at once.
     """
-    attempted: set[str] = set()
-    inline_budget = MAX_RETRIES_PER_TICK
-    for request in retries.pending():
-        if request.item_window.is_paged:
-            attempted.add(request.request_ref)
-            _hand_off(request, retries)
-        elif inline_budget > 0:
-            inline_budget -= 1
-            attempted.add(request.request_ref)
-            _retry_inline(request, client=client, reader=reader, clock=clock, retries=retries)
-    return attempted
+    retries = tick.retries
+    if retries.has_room_for(request.request_ref):
+        _charge(request, retries)
+        _settle(request, retries, _attempt_inline(tick, request))
+    else:
+        outcome = _attempt_inline(tick, request)
+        if not outcome.resolved:
+            _log_failure(request, retries.record_failure(request), outcome)
+    _save_retry_state(retries)
+
+
+def _attempt_inline(tick: _Tick, request) -> _Outcome:
+    return _attempt(request, client=tick.client, reader=tick.reader, clock=tick.clock)
 
 
 def run_paged_report_job(request_wire: dict) -> None:
@@ -177,29 +283,17 @@ def run_paged_report_job(request_wire: dict) -> None:
     )
 
 
-def _handle_feed_request(request, *, client, reader, clock, retries: RetrySet) -> None:
-    if request.item_window.is_paged:
-        _hand_off(request, retries)
-        return
-    outcome = _attempt(request, client=client, reader=reader, clock=clock)
-    if outcome.resolved:
-        retries.resolve(request.request_ref)
-    else:
-        _log_failure(request, retries.record_failure(request), outcome)
-
-
-def _retry_inline(request, *, client, reader, clock, retries: RetrySet) -> None:
+def _retry_inline(tick: _Tick, request) -> None:
     """Re-attempt one v1 retry-set request: charge it, checkpoint, attempt, checkpoint again.
 
     The checkpoint BEFORE the attempt persists the charge (and the rotation to the back), so a
     worker killed mid-attempt still counts the attempt and the next tick starts with the
     requests behind it. The checkpoint AFTER persists the outcome (resolved or still queued).
     """
-    if not _charge(request, retries):
+    if not _charge(request, tick.retries):
         return
-    outcome = _attempt(request, client=client, reader=reader, clock=clock)
-    _settle(request, retries, outcome)
-    _save_retry_state(retries)
+    _settle(request, tick.retries, _attempt_inline(tick, request))
+    _save_retry_state(tick.retries)
 
 
 def _hand_off(request, retries: RetrySet) -> None:

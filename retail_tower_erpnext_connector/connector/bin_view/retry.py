@@ -16,9 +16,10 @@ The set is bounded twice: an entry is abandoned after :data:`MAX_RETRY_TICKS` fa
 :data:`MAX_PENDING` requests are held at once (a failure that does not fit is abandoned at
 once, with the same log).
 
-Each tick re-attempts at most :data:`MAX_RETRIES_PER_TICK` v1 requests inline (Codex P1 on
-#56), so a run of slow transports cannot push the cron job past its queue timeout before the
-state is saved; paged requests are handed off to a long-queue job instead (see ``poller``). A
+The poller bounds the inline (v1) work of one tick — new feed requests and retries combined —
+by ``poller.MAX_INLINE_ATTEMPTS_PER_TICK`` and a tick time budget (Codex P1s on #56), so a run
+of slow transports cannot push the cron job past its queue timeout before the state is saved;
+paged requests are handed off to a long-queue job instead (see ``poller``). A
 retry is CHARGED before it runs (:meth:`RetrySet.charge_retry`) and the poller checkpoints the
 set before and after every attempt, so an attempt cut short by a killed worker still counts
 toward the abandon bound. Charging moves the request to the back of the order, so requests
@@ -41,11 +42,6 @@ from .contracts import BinViewRequest
 MAX_RETRY_TICKS = 5
 # Most requests held for retry at once (one per reconciliation run in flight).
 MAX_PENDING = 200
-# Most v1 retries re-attempted inline in one tick. Frappe v15 runs this cron on the default queue
-# (300 s job timeout) and the DP2 transport times out at 30 s per call, so 5 single-call retries
-# cost at most ~150 s. Paged retries never run inline (they go to the long queue). The rest wait
-# for later ticks, in order.
-MAX_RETRIES_PER_TICK = 5
 
 QUEUED = "queued"
 ABANDONED = "abandoned"
@@ -84,6 +80,10 @@ class RetrySet:
     def pending(self) -> list[BinViewRequest]:
         """The requests to re-attempt this tick (a snapshot; safe to mutate the set while iterating)."""
         return [request for request, _ in self._entries.values()]
+
+    def has_room_for(self, request_ref: str) -> bool:
+        """True when ``request_ref`` is held already or the set is below ``MAX_PENDING``."""
+        return not self._is_full_for(request_ref)
 
     def failures(self, request_ref: str) -> int:
         entry = self._entries.get(request_ref)
