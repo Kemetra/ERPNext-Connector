@@ -82,7 +82,18 @@ def _ack_key(work_item: PostingWorkItem, outcome: str) -> str:
     keeps each logical outcome's key stable (so a dropped-response resend of the SAME ack still
     dedupes) while letting a later different outcome use its own key. NOT per-attempt — a
     per-attempt nonce would break resend dedup.
+
+    RT-171: ``failed_transient`` is the one outcome that legitimately repeats for one work-item —
+    DP2 re-offers it after each transient, and each re-offer is a NEW logical ack that must reach
+    the handler (it re-heads the row and spends one unit of DP2's retry budget). Backend-Core's
+    ack route is ``@Idempotent``: a second ``{workItemRef}:failed_transient`` would be REPLAYED
+    from the stored response without running the handler, leaving the row pending forever. So the
+    transient key also carries the offer's ``itemCursor``: stable across resends of ONE offer (resend
+    dedup still holds) and different across re-offers (DP2 issues a new cursor per offer). The
+    terminal ``posted`` / ``permanently_rejected`` keys are unchanged — they happen at most once.
     """
+    if outcome == "failed_transient":
+        return f"{work_item.work_item_ref}:failed_transient:{work_item.item_cursor}"
     return f"{work_item.work_item_ref}:{outcome}"
 
 
