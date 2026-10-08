@@ -95,9 +95,10 @@ What this means for the Connector:
   `failed_transient`, `permanently_rejected`), closed rejection categories and exact-decimal money are
   explicit and machine-readable, so a component can reason about a posting and its failure without
   scraping ERPNext.
-- **Auditable by default.** Every posting keeps its provenance (source system, external id, sale
-  reference) on the ERPNext document and in the Posting Log, with the request correlation ID in the
-  logs, so decisions made or assisted by AI can be traced, reviewed and repaired.
+- **Auditable by default.** Every posting keeps its provenance on the ERPNext document (source
+  system, external id and sale reference as Custom Fields), and the Posting Log records the
+  source system, external id, resulting document reference and outcome, so decisions made or assisted
+  by AI can be traced, reviewed and repaired.
 - **Fail closed, never guess.** An unmapped store, unit, tender or Item is rejected with a structured
   reason rather than guessed. Intelligent components inherit the same discipline.
 - **Mapping and posting designed for assistance.** The mapping tables in Connector Settings and the
@@ -219,7 +220,7 @@ entries, payment methods, return behavior). It is never the production Retail To
 | 007 Connector Admin Counterpart | [`specs/007-connector-admin-counterpart`](specs/007-connector-admin-counterpart) | Codeable subset implemented: credential-lifecycle fields in Connector Settings, expiry warning and re-auth classification ([decision](docs/decisions/connector-credential-lifecycle.md), [cutover runbook](docs/runbooks/connector-credential-cutover.md)) |
 | 009 Receivables and Third-Party Posting | [`specs/009-receivables-and-third-party-posting-adapter`](specs/009-receivables-and-third-party-posting-adapter) | Planning only: no connector code, no gate marked satisfied |
 
-Specs `005` and `008` are intentional numbering gaps in this repository and are not planned backfills.
+Specs `005` (Inventory Export and Reservation) and `008` (Upgrade and Compatibility Runbook) have no spec folder yet; their entries in the [roadmap](#spec-roadmap-and-delivery-waves) remain planned.
 The stock-view (Bin) client is implemented under the Backend-Core 019 / stock-view contract and has no
 folder of its own under `specs/`.
 
@@ -268,7 +269,7 @@ pending in Backend-Core rather than being mass-rejected.
 | DocType | Kind | Purpose |
 | --- | --- | --- |
 | Connector Settings | Single | `dp2_base_url`; `dp2_token` (Password field); credential lifecycle fields `dp2_connector_registration_id`, `dp2_credential_id`, `dp2_credential_issued_at`, `dp2_credential_expires_at`, `dp2_credential_warn_days`; the four map tables |
-| Posting Log | Standard | Idempotency record: `source_system`, `external_id`, `document_doctype`, `document_name`, `sale_ref`, `outcome`, `correlation_id` |
+| Posting Log | Standard | Idempotency record: `source_system`, `external_id`, `document_doctype`, `document_name`, `outcome` (populated on a successful posting). The DocType also defines `sale_ref` and `correlation_id`, which the posted path does not populate today |
 | RT Uom / Warehouse / Store Customer / Tender Mode Map Row | Child tables | Rows of the four maps above |
 
 Exactly-once posting (Gate G5) rests on two composite unique indexes: `unique_rt_posting_idem` on
@@ -291,6 +292,213 @@ Posting Log `(source_system, external_id)` and `unique_rt_si_provenance` on Sale
   bench, not locally. Live cross-system validation against a staging ERPNext remains the external
   frontier.
 - **Documentation lag.** Several docs and spec headers still describe the original docs-only scaffold.
+
+---
+
+## Spec roadmap and delivery waves
+
+> **Planning reference, kept on purpose.** The constitution's Development Workflow section says delivery follows the spec roadmap (001–008) and delivery waves 0–9 defined in this README, so they stay here unchanged from `main`. They describe the plan, not what is implemented; see [Current implementation status](#current-implementation-status) for that.
+
+## Initial spec roadmap
+
+### 001 — Frappe App Foundation
+
+Create the custom Frappe app foundation.
+
+Scope:
+
+- Frappe app scaffold.
+- App metadata.
+- Install policy.
+- Version pinning policy.
+- Connector Settings DocType placeholder.
+- Local/staging setup notes.
+- No ERP business mutation yet.
+
+Exit criteria:
+
+- App can be installed on a staging ERPNext site.
+- App metadata is clear.
+- No product, stock, or sales mutation exists.
+- Upgrade policy is documented.
+
+### 002 — DocType Mapping Reference
+
+Document how ERPNext concepts map to Retail Tower concepts.
+
+Mapping areas:
+
+- Company ↔ Tenant.
+- Warehouse ↔ Store / Branch.
+- Item ↔ Product.
+- Barcode ↔ Product alias / scan code.
+- UOM ↔ Retail selling unit.
+- Price List ↔ Retail price source.
+- POS Invoice / Sales Invoice ↔ Retail sale.
+- Payment Entry ↔ Tender settlement.
+- Return Invoice ↔ Refund / return flow.
+
+Exit criteria:
+
+- Mapping matrix is reviewed.
+- Ambiguous mappings are recorded as decisions.
+- No implementation starts before required decisions are signed.
+
+### 003 — Data-Pulse Auth and API Policy
+
+Define the secure integration contract between Data-Pulse-2 and this connector.
+
+Scope:
+
+- Service authentication model.
+- Token storage policy.
+- IP restriction policy if applicable.
+- Request/response envelope.
+- Error taxonomy.
+- Idempotency requirements.
+- Correlation ID requirements.
+- Rate-limit and retry policy.
+
+Exit criteria:
+
+- Data-Pulse can authenticate to the connector in staging.
+- Secrets are not exposed in logs or UI.
+- Auth model is documented before business endpoints are implemented.
+
+### 004 — Product and Price Export
+
+Expose ERPNext product and pricing information to Data-Pulse.
+
+Scope:
+
+- Item export.
+- Barcode export.
+- UOM export.
+- Price List export.
+- Active/inactive item state.
+- Product update detection.
+- Data-Pulse pull or push strategy.
+
+Exit criteria:
+
+- Data-Pulse can build a canonical catalog from ERPNext data.
+- Missing price and inactive product states are explicit.
+- POS-Pulse still receives catalog through Data-Pulse only.
+
+### 005 — Inventory Export and Reservation
+
+Expose ERPNext warehouse stock information safely.
+
+Scope:
+
+- Warehouse/store mapping.
+- Stock snapshot export.
+- Stock availability policy.
+- Reservation/projection policy if approved.
+- Stock reconciliation references.
+- Stale data handling.
+
+Exit criteria:
+
+- Data-Pulse can show branch stock availability.
+- Stale stock is visible.
+- No direct POS stock mutation exists.
+- Stock impact model is signed before mutation behavior.
+
+### 006 — Sales Posting Adapter
+
+Create ERPNext sales documents from validated Data-Pulse sale commands.
+
+Scope:
+
+- POS Invoice or Sales Invoice creation.
+- Payment method mapping.
+- ERP reference persistence.
+- Idempotency protection.
+- Retry-safe posting.
+- Failure classification.
+- Posting status response.
+
+Exit criteria:
+
+- Same sale replay does not create duplicate ERP documents.
+- Failed posting is repairable without modifying the original sale fact.
+- ERP document reference is returned to Data-Pulse.
+
+### 007 — Tax and Fiscal Fields Egypt
+
+Support tax and fiscal extension points required for Egyptian retail operations.
+
+Scope:
+
+- VAT field mapping.
+- Tax category mapping.
+- Receipt/invoice fiscal fields.
+- Tax total validation.
+- Regional compliance extension points.
+- Golden fiscal test fixtures.
+
+Exit criteria:
+
+- Receipt tax equals Data-Pulse sale tax equals ERP invoice tax.
+- Fiscal fields are documented.
+- Customer-facing production is blocked until the fiscal gate passes.
+
+### 008 — Upgrade and Compatibility Runbook
+
+Document safe upgrade and compatibility rules.
+
+Scope:
+
+- ERPNext version pinning.
+- Frappe version pinning.
+- Staging upgrade workflow.
+- Backup and restore steps.
+- Connector regression checklist.
+- Rollback policy.
+- Compatibility matrix.
+
+Exit criteria:
+
+- Staging upgrade path is documented.
+- Backup/restore is rehearsed.
+- Connector regression checks are defined.
+- Production upgrades require explicit approval gates.
+
+---
+
+## Delivery Waves
+
+| Wave | Purpose | Connector Responsibility |
+|---:|---|---|
+| 0 | Governance and truth reconciliation | Confirm repo name, app name, and boundaries |
+| 1 | ERPNext reference lab | Support ERPNext behavior mapping |
+| 2 | Connector skeleton and secure channel | Create custom app foundation and auth path |
+| 3 | Product/catalog source of truth | Export product, barcode, UOM, and pricing data |
+| 4 | Inventory and stock truth | Export warehouse/store stock information |
+| 5 | POS sale sync and ERP posting | Create ERP sales documents safely |
+| 6 | VAT/fiscal hardening | Support tax and fiscal fields |
+| 7 | Console operational UI | Provide status/errors to Data-Pulse for Console |
+| 8 | Returns, refunds, shifts, cash control | Support return and closing behavior |
+| 9 | Pilot and rollout | Support staging, backup, rollback, and regression |
+
+---
+
+## Quality Gates
+
+| Gate | Name | Connector Evidence |
+|---|---|---|
+| G1 | Reference sign-off | ERPNext behavior map and DocType mapping reviewed |
+| G2 | Contract gate | Data-Pulse connector contract approved |
+| G3 | Migration gate | Additive migrations and rollback notes reviewed |
+| G4 | Security gate | Auth, token storage, and tenant isolation verified |
+| G5 | Idempotency gate | Replay does not duplicate ERP documents |
+| G6 | Tax/fiscal gate | Tax totals match across POS, Data-Pulse, and ERPNext |
+| G7 | Observability gate | Failures, retries, logs, and correlation IDs available |
+| G8 | Upgrade gate | Staging upgrade and regression checklist passed |
+| G9 | Pilot gate | One-branch pilot completed with rollback rehearsal |
+
+---
 
 ---
 
