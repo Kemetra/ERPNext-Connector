@@ -4,459 +4,364 @@
 
 # Retail Tower ERPNext Connector
 
-**The ERPNext-facing integration layer for Retail Tower OS — the only component allowed to touch ERPNext.**
+**Retail Tower OS — the command tower for modern retail, with AI embedded in its architecture and design. This repository is its ERPNext integration track: the only component allowed to touch ERPNext.**
 
-Custom Frappe / ERPNext app that adapts ERPNext business documents, APIs, and configuration into
-stable contracts consumed by Data-Pulse-2.
+The Retail Tower ERPNext Connector is a custom Frappe / ERPNext app that adapts ERPNext business
+documents into stable, idempotent postings driven by the contracts of Backend-Core (Data-Pulse-2).
 
 <p align="center">
   <a href="pyproject.toml"><img alt="Platform: Frappe / ERPNext v15" src="https://img.shields.io/badge/platform-Frappe%20%2F%20ERPNext%20v15-0e7490?style=flat-square&logo=python&logoColor=white"></a>
-  <a href="README.md"><img alt="Repo: ERPNext Connector" src="https://img.shields.io/badge/repo-ERPNext%20Connector-181717?style=flat-square&logo=github&logoColor=white"></a>
-  <a href=".specify/memory/constitution.md"><img alt="Boundary: Data-Pulse-2 only" src="https://img.shields.io/badge/boundary-Data--Pulse--2%20only-7c3aed?style=flat-square"></a>
-  <a href="LICENSE"><img alt="License: internal" src="https://img.shields.io/badge/license-internal-334155?style=flat-square"></a>
+  <a href="https://github.com/Kemetra/ERPNext-Connector"><img alt="Repo: ERPNext Connector" src="https://img.shields.io/badge/repo-ERPNext%20Connector-181717?style=flat-square&logo=github&logoColor=white"></a>
+  <a href=".specify/memory/constitution.md"><img alt="Boundary: Backend-Core only" src="https://img.shields.io/badge/boundary-Backend--Core%20only-7c3aed?style=flat-square"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-059669?style=flat-square"></a>
 </p>
 
 <p align="center">
-  <a href="specs"><img alt="Specs 001 to 006 shipped" src="https://img.shields.io/badge/specs-001%E2%80%93006%20shipped-059669?style=flat-square"></a>
-  <a href="retail_tower_erpnext_connector/connector/posting/poller.py"><img alt="Posting poller: active" src="https://img.shields.io/badge/posting%20poller-active-059669?style=flat-square"></a>
-  <a href="retail_tower_erpnext_connector/connector/bin_view/poller.py"><img alt="Bin-view client: live (019)" src="https://img.shields.io/badge/bin--view%20client-live%20(019)-2563eb?style=flat-square"></a>
+  <a href="retail_tower_erpnext_connector/connector/posting/poller.py"><img alt="Posting poller: every minute" src="https://img.shields.io/badge/posting%20poller-every%20minute-059669?style=flat-square"></a>
+  <a href="retail_tower_erpnext_connector/connector/bin_view/poller.py"><img alt="Bin-view poller: every 5 minutes" src="https://img.shields.io/badge/bin--view%20poller-every%205%20min-2563eb?style=flat-square"></a>
   <a href="retail_tower_erpnext_connector/hooks.py"><img alt="Transport: pull / feed + ack" src="https://img.shields.io/badge/transport-pull%20%2F%20feed%20%2B%20ack-0e7490?style=flat-square"></a>
+  <a href="#current-implementation-status"><img alt="Specs: 001-004, 006-007 implemented" src="https://img.shields.io/badge/specs-001%E2%80%93004%2C%20006%E2%80%93007%20implemented-059669?style=flat-square"></a>
 </p>
 
 <p align="center">
   <a href="docs/decisions"><img alt="Posting: idempotent" src="https://img.shields.io/badge/posting-idempotent-0f766e?style=flat-square"></a>
-  <a href="README.md"><img alt="ERP posting: Sales Invoice (006)" src="https://img.shields.io/badge/ERP%20posting-Sales%20Invoice%20(006)-b45309?style=flat-square"></a>
-  <a href="README.md"><img alt="ERPNext fork: never" src="https://img.shields.io/badge/ERPNext%20fork-never-dc2626?style=flat-square"></a>
-  <a href="docs/decisions/tax-fiscal-model.md"><img alt="Fiscal gate: pending" src="https://img.shields.io/badge/fiscal%20gate-pending-f59e0b?style=flat-square"></a>
+  <a href="#what-the-connector-posts-today"><img alt="ERP posting: Sales Invoice + return Sales Invoice" src="https://img.shields.io/badge/ERP%20posting-Sales%20Invoice%20%2B%20returns-b45309?style=flat-square"></a>
+  <a href=".specify/memory/constitution.md"><img alt="ERPNext fork: never" src="https://img.shields.io/badge/ERPNext%20fork-never-dc2626?style=flat-square"></a>
+  <a href="#known-gaps-and-gated-work"><img alt="Tax / fiscal: not built" src="https://img.shields.io/badge/tax%20%2F%20fiscal-not%20built-f59e0b?style=flat-square"></a>
+  <a href="#-ai-embedded-by-design"><img alt="AI: embedded by design" src="https://img.shields.io/badge/AI-embedded%20by%20design-8b5cf6?style=flat-square"></a>
 </p>
 
 </div>
 
 ---
 
-## Purpose
+## 🧩 One project, four development tracks
 
-Retail Tower OS uses ERPNext as its ERP, accounting, and inventory reference system — but ERPNext
-does **not** replace the Retail Tower operational applications. This connector keeps the ERPNext
-integration isolated, versioned, testable, and upgrade-safe.
+**Retail Tower OS is one product.** Its four repositories are development divisions, split by
+responsibility so that each can be built, tested and released independently. They are not separate
+products: there is one architecture, one set of contracts and one AI-embedded design.
 
-The target integration rule is one direction, through one boundary:
+| Track | Repository | Responsibility |
+| --- | --- | --- |
+| Backend-Core | [`Kemetra/Backend-Core`](https://github.com/Kemetra/Backend-Core) | Contract and orchestration boundary: APIs, data, workers, tenant/store context, sync operations |
+| POS | [`Kemetra/POS`](https://github.com/Kemetra/POS) | Windows cashier terminal: Electron app, offline state, receipts, POS to Backend-Core sync |
+| Admin-Console | [`Kemetra/Admin-Console`](https://github.com/Kemetra/Admin-Console) | Admin/operator web frontend: tenant/store operations, catalog, inventory views, sync operations |
+| ERPNext-Connector | [`Kemetra/ERPNext-Connector`](https://github.com/Kemetra/ERPNext-Connector) | The only ERPNext/Frappe adapter: DocType mapping and posting **◀ you are here** |
 
 ```text
-POS-Pulse             ──▶  Data-Pulse-2  ──▶  Retail Tower ERPNext Connector  ──▶  ERPNext / Frappe
-Retail-Tower-Console  ──▶  Data-Pulse-2  ──▶  Retail Tower ERPNext Connector  ──▶  ERPNext / Frappe
+POS / Admin-Console -> Backend-Core -> ERPNext-Connector -> ERPNext / Frappe
+```
+
+[`Kemetra/Orchestrator`](https://github.com/Kemetra/Orchestrator) is the technical handbook
+(architecture, ADRs, runbooks). It is not a track and holds no application code.
+
+---
+
+## 🧠 AI-embedded by design
+
+Retail Tower OS is **AI-embedded**, not AI-integrated. AI is a founding part of the product's
+**architecture and design**: native from the inside, not a layer added on top and not merely an
+integration with an external service. It applies on two levels:
+
+- **Architecture.** Contracts, events, audit, tenant isolation and the data model are built so that
+  intelligent components can understand and act on them through the same boundaries as every other
+  component.
+- **Design.** Workflows and surfaces (the product and UX design of the cashier, operator and
+  integration experiences) are designed with intelligence as a native participant, while humans keep
+  authority.
+
+| AI-integrated (what Retail Tower OS is **not**) | AI-embedded (what Retail Tower OS **is**) |
+| --- | --- |
+| AI is a feature bolted on top of an existing system | AI is a native layer of the system itself, in its architecture and its design |
+| Reads or writes ERP data through side channels or direct ERP access | Acts through the same Backend-Core contracts, work items and outcome acknowledgements as every other component |
+| Sits outside the audit and idempotency model | Runs inside it: idempotent posting, structured outcomes and correlation IDs apply to AI-driven actions like any other actor |
+| Can be removed without changing the architecture or the product design | Shapes both: explicit contracts, fail-closed validation and structured, auditable records are built to be understood and acted on by intelligent components |
+
+How each track carries it:
+
+| Track | Its part in the AI-embedded design |
+| --- | --- |
+| Backend-Core | Contracts, events and audit as the substrate |
+| POS | Cashier workflow and offline-first local state |
+| Admin-Console | Operator surfaces |
+| ERPNext-Connector (this repo) | ERP mapping and posting |
+
+What this means for the Connector:
+
+- **Same boundary, same rules.** The Connector stays the only ERPNext/Frappe adapter and talks to
+  Backend-Core only (pull feed plus outcome acknowledgement). AI-driven behavior gets no direct path
+  to ERPNext and no privileged side door.
+- **Contracts an intelligent component can read.** Work items, typed outcomes (`posted`,
+  `failed_transient`, `permanently_rejected`), closed rejection categories and exact-decimal money are
+  explicit and machine-readable, so a component can reason about a posting and its failure without
+  scraping ERPNext.
+- **Auditable by default.** Every posting keeps its provenance (source system, external id, sale
+  reference) on the ERPNext document and in the Posting Log, with the request correlation ID in the
+  logs, so decisions made or assisted by AI can be traced, reviewed and repaired.
+- **Fail closed, never guess.** An unmapped store, unit, tender or Item is rejected with a structured
+  reason rather than guessed. Intelligent components inherit the same discipline.
+- **Mapping and posting designed for assistance.** The mapping tables in Connector Settings and the
+  replay-safe, idempotent posting path are the points where intelligent assistance (for example
+  proposing a mapping or triaging a rejection) can attach without changing the boundary.
+- **Upgrade-safe.** No ERPNext fork and no ERPNext core code. Behavior is added only through
+  Frappe-supported extension mechanisms (custom app, fixtures, scheduler events).
+- **Human-governed.** Authority, scope and approval stay with people. Operators own the mapping
+  tables and credentials; AI works inside them.
+
+> AI-embedded describes the platform's architectural and design direction. **This repository contains
+> no AI-driven behavior today**; what is shipped is tracked in
+> [Current implementation status](#current-implementation-status) and the per-feature specs under
+> [`specs/`](specs).
+
+---
+
+## Purpose
+
+Retail Tower OS uses ERPNext as its ERP, accounting and inventory reference system, but ERPNext
+does **not** replace the Retail Tower operational applications. This connector keeps the ERPNext
+integration isolated, versioned, testable and upgrade-safe.
+
+The integration rule is one direction, through one boundary:
+
+```text
+POS            ──▶  Backend-Core  ──▶  Retail Tower ERPNext Connector  ──▶  ERPNext / Frappe
+Admin-Console  ──▶  Backend-Core  ──▶  Retail Tower ERPNext Connector  ──▶  ERPNext / Frappe
 ERPNext POS behavior  ──▶  Reference only
 ```
+
+> **Naming.** Program shorthand and legacy names refer to the same repositories: Data-Pulse-2 / DP2 =
+> [`Kemetra/Backend-Core`](https://github.com/Kemetra/Backend-Core); POS-Pulse =
+> [`Kemetra/POS`](https://github.com/Kemetra/POS); Retail-Tower-Console =
+> [`Kemetra/Admin-Console`](https://github.com/Kemetra/Admin-Console). Code and configuration in this
+> repository still use the `dp2` / `Data-Pulse-2` names (for example the `dp2_base_url` setting).
 
 ---
 
 ## 🔗 Synchronization — the only path to ERPNext
 
-The connector is the **only** component allowed to touch ERPNext. It pulls sale postings from
-Data-Pulse-2's posting feed (capture-UP), resolves each line to a confirmed ERPNext Item, posts,
-and acks the outcome. It never forks ERPNext, copies its core, or exports catalog out of ERPNext
-(reverse direction barred by G4).
+The connector is the **only** component allowed to touch ERPNext. It pulls posting work items from
+Backend-Core's posting feed (capture-UP), applies the ERPNext Item reference that Backend-Core has
+already resolved for each line, posts the document to ERPNext, and acknowledges the outcome. It
+also answers Backend-Core's stock-view requests by reading ERPNext Bin on-hand and reporting it back.
+It never forks ERPNext, copies its core, or exports catalog out of ERPNext.
 
 <p align="center">
   <img src="docs/assets/architecture/retail-tower-sync-flow.svg" alt="Animated Retail Tower OS synchronization diagram, connector focus" width="100%"/>
 </p>
 
 ```text
-Data-Pulse-2  ──▶  Retail Tower ERPNext Connector  ──▶  ERPNext / Frappe
+Backend-Core  ──▶  Retail Tower ERPNext Connector  ──▶  ERPNext / Frappe
 ```
 
 ### Where the Connector sits — the full ecosystem
 
 The diagram below places the connector within the complete five-repository Retail Tower OS
-ecosystem: the **Retail Tower Orchestrator** control-plane band on top, governing the four
-delivery repos beneath it. POS-Pulse and Retail-Tower-Console both synchronize through
-Data-Pulse-2, the single contract boundary, which alone reaches ERPNext through this connector.
+ecosystem: the **Orchestrator** control-plane band on top, governing the four delivery repositories
+beneath it. POS and Admin-Console both synchronize through Backend-Core, the single contract
+boundary, which alone reaches ERPNext through this connector.
 
 <p align="center">
-  <img src="docs/assets/architecture/retail-tower-ecosystem.svg" alt="Retail Tower OS ecosystem diagram: an Orchestrator control-plane band over five repositories, with POS-Pulse and Retail-Tower-Console synchronizing through Data-Pulse-2 to the ERPNext Connector and ERPNext" width="100%"/>
+  <img src="docs/assets/architecture/retail-tower-ecosystem.svg" alt="Retail Tower OS ecosystem diagram: an Orchestrator control-plane band over five repositories, with POS and Admin-Console synchronizing through Backend-Core to the ERPNext Connector and ERPNext" width="100%"/>
 </p>
 
 <p align="center">
-  <em>The ERPNext Connector — <strong>this repository</strong> — is the highlighted ERPNext-facing node
-  (gold ★ THIS REPO badge). The diagram is a live animated SVG that honors
-  <code>prefers-reduced-motion</code> for accessibility.</em>
+  <em>The ERPNext Connector — <strong>this repository</strong> — is the highlighted ERPNext-facing node.
+  The diagram is a live animated SVG that honors <code>prefers-reduced-motion</code>.</em>
 </p>
 
-Full detail (posting flow + sequence): [docs/architecture/synchronization.md](docs/architecture/synchronization.md) ·
-Program control plane: [Retail-Tower-Orchestrator](https://github.com/ahmed-shaaban-94/Retail-Tower-Orchestrator).
+Full detail: [docs/architecture/synchronization.md](docs/architecture/synchronization.md) ·
+Program technical handbook: [Orchestrator](https://github.com/Kemetra/Orchestrator).
 
 ---
 
-## Repository Role
+## Repository role
 
-This repository owns the custom Frappe app `retail_tower_erpnext_connector`, responsible for:
+This repository owns the custom Frappe app `retail_tower_erpnext_connector`. It owns:
 
-- ERPNext / Frappe custom app foundation.
-- Connector settings and integration configuration.
-- Data-Pulse service authentication policy.
-- ERPNext DocType mapping references.
-- Product and price export surfaces.
-- Inventory and warehouse export surfaces.
-- Sales posting adapter.
-- Tax and fiscal extension points.
-- Upgrade and compatibility runbooks.
+- the ERPNext / Frappe custom app foundation and its install / upgrade policy;
+- Connector Settings: Backend-Core endpoint, credential references and the posting maps;
+- authentication **to** Backend-Core as a machine principal (the connector is the client; Backend-Core makes no outbound calls);
+- the sales posting adapter (Sales Invoice, void credit note, partial return) with idempotency and failure classification;
+- the stock-view (Bin) read-and-report leg;
+- ERPNext-specific mapping and extension points.
 
----
+### Non-goals
 
-## Non-Goals
-
-This repository must not become a fork of ERPNext.
-
-Non-goals:
-
-- Do not fork ERPNext.
-- Do not copy ERPNext core code into this repository.
-- Do not implement POS-Pulse cashier UI here.
-- Do not allow POS-Pulse to call Frappe directly.
-- Do not put Retail-Tower-Console backend logic here.
-- Do not bypass Data-Pulse-2 contracts.
+- Do not fork ERPNext, and do not copy ERPNext core code into this repository.
+- Do not implement the POS cashier UI or the Admin-Console here.
+- Do not let POS or Admin-Console call Frappe directly.
+- Do not bypass Backend-Core contracts.
+- Do not resolve, search for, create or substitute ERPNext Items: Backend-Core is the Retail Tower catalog authority and supplies the Item reference.
 - Do not perform production ERPNext upgrades without staging gates.
-- Do not implement sales, stock, or product mutations before the foundation and contract specs are approved.
+
+ERPNext POS is a business-behavior reference only (POS Profile, POS Invoice lifecycle, closing
+entries, payment methods, return behavior). It is never the production Retail Tower cashier.
 
 ---
 
-## Architecture Boundary
+## Current implementation status
 
-Retail Tower OS keeps operational control in Data-Pulse-2. There is no direct path from
-POS-Pulse or Retail-Tower-Console to ERPNext.
+> **Source of truth.** GitHub `main` is the technical truth for what is implemented; active work and
+> priorities are tracked in Jira (project **RT**). The `Status:` headers inside `specs/*/spec.md`
+> were written at spec time and often lag the code (for example 001 to 004 still read "Draft"), and
+> `wave-status.md` files are historical logs. The tables below are derived from the Python package,
+> `hooks.py` and tests on `main`. Re-verify before relying on them.
 
-```text
-POS-Pulse
-  └─▶ Data-Pulse-2
-        └─▶ Retail Tower ERPNext Connector
-              └─▶ ERPNext / Frappe
+### Specs
 
-Retail-Tower-Console
-  └─▶ Data-Pulse-2
-        └─▶ Retail Tower ERPNext Connector
-              └─▶ ERPNext / Frappe
+| Spec | Folder | State on `main` |
+| --- | --- | --- |
+| 001 Frappe App Foundation | [`specs/001-frappe-app-foundation`](specs/001-frappe-app-foundation) | Implemented: app scaffold, `required_apps = ["erpnext"]`, Connector Settings DocType, version-pin and upgrade policy ([docs](docs/decisions/version-pin-upgrade-policy.md)) |
+| 002 DocType Mapping Reference | [`specs/002-doctype-mapping-reference`](specs/002-doctype-mapping-reference) | Documentation only: [mapping matrix](docs/architecture/doctype-mapping-reference.md) and signed decisions ([customer](docs/decisions/mapping-customer.md), [UOM](docs/decisions/mapping-uom.md)); its header still reads "Draft" |
+| 003 Auth and API Policy | [`specs/003-data-pulse-auth-and-api-policy`](specs/003-data-pulse-auth-and-api-policy) | Implemented: bearer-authenticated pull/ack client, secret scrubbing, signed [token scope](docs/decisions/connector-token-scope.md) decision |
+| 004 Product to ERPNext Item mapping | [`specs/004-product-erpnext-item-mapping`](specs/004-product-erpnext-item-mapping) | Policy realised in the posting path: each line's pre-resolved `erpnextItemRef` is applied as the Item; the connector never resolves or creates Items. No product or price export from ERPNext exists (barred by the contract and the constitution) |
+| 006 Sales Posting Adapter | [`specs/006-sales-posting-adapter`](specs/006-sales-posting-adapter) | Implemented and scheduled; extended by later Jira issues (stock movement, tender settlement, void, partial return). See below |
+| 007 Connector Admin Counterpart | [`specs/007-connector-admin-counterpart`](specs/007-connector-admin-counterpart) | Codeable subset implemented: credential-lifecycle fields in Connector Settings, expiry warning and re-auth classification ([decision](docs/decisions/connector-credential-lifecycle.md), [cutover runbook](docs/runbooks/connector-credential-cutover.md)) |
+| 009 Receivables and Third-Party Posting | [`specs/009-receivables-and-third-party-posting-adapter`](specs/009-receivables-and-third-party-posting-adapter) | Planning only: no connector code, no gate marked satisfied |
 
-ERPNext POS behavior = Reference only.
-```
+Specs `005` and `008` are intentional numbering gaps in this repository and are not planned backfills.
+The stock-view (Bin) client is implemented under the Backend-Core 019 / stock-view contract and has no
+folder of its own under `specs/`.
 
----
+### Runtime surfaces
 
-## ERPNext POS Policy
+| Surface | Where | What it does |
+| --- | --- | --- |
+| Posting poller | `connector/posting/poller.py`, cron `* * * * *` | Pulls posting pages, posts each work item, acks `posted` / `failed_transient` / `permanently_rejected`. Bounded to 20 pages per tick; refuses to post while the exactly-once indexes are missing; skips the tick when Connector Settings is not configured |
+| Bin-view poller | `connector/bin_view/poller.py`, cron `*/5 * * * *` | Pulls wanted Bin-view reads from Backend-Core, reads ERPNext `Bin` on-hand per warehouse (quantity only, no valuation), reports the snapshot. Supports paged multi-window reports (stock-view 1.2) with a bounded retry set |
+| Schema guard | `hooks.py` `after_install` / `after_migrate`, `connector/schema.py`, `patches/` | Ensures the two Gate G5 unique indexes on every install and migrate |
+| Fixtures | `hooks.py` `fixtures`, `fixtures/custom_field.json` | Provenance Custom Fields only, filtered by name |
 
-ERPNext POS is used as a business-behavior reference only.
+No `doc_events` or `override_doctype_class` are registered: the connector posts from its own
+scheduled worker and does not intercept ERPNext document events.
 
-It may be used to study:
+### What the connector posts today
 
-- POS Profile behavior.
-- POS Invoice lifecycle.
-- POS Closing Entry behavior.
-- Payment method mapping.
-- Warehouse and stock impact behavior.
-- Return / refund behavior.
-- Tax and fiscal behavior.
+| Backend-Core work item | ERPNext result |
+| --- | --- |
+| `sale_post` | **Sales Invoice**, submitted with `update_stock = 1` (the invoice is the stock-moving document), `disable_rounded_total = 1`, `businessDate` as the posting date. A tender-bearing sale is `is_pos = 1` with one `payments` row per tender |
+| `reversal` of kind `void` | **Return Sales Invoice** (`is_return = 1`, credit note) mirroring the original's stock, rounding and payment rows |
+| `reversal` of kind `return` (partial) | **Return Sales Invoice** carrying only the returned lines, each linked to the original row by `rt_line_ref`, with the cash refund paid from `refundTenders` |
+| `reversal` of kind `refund` (amount only) | **Rejected** as `permanently_rejected` / `validation`: an amount-only refund carries no returned lines and would credit the whole sale |
 
-It must not become the production cashier terminal for Retail Tower OS.
+Failures map onto Backend-Core's closed rejection categories (`validation`, `closed_period`,
+`unmapped_item`, `unmapped_account`, `other`); retryable errors are acked `failed_transient`. A
+tracked (batch or serial) Item on a stock-moving document fails closed. Replay is safe: the same
+sale never creates a second ERPNext document.
 
----
+### Mapping tables (Retail Tower concept to ERPNext)
 
-## Initial Spec Roadmap
+| Retail Tower | ERPNext | Where configured |
+| --- | --- | --- |
+| Store | Warehouse | Connector Settings `warehouse_map` (RT Warehouse Map Row) |
+| Store | Customer | Connector Settings `store_customer_map` (RT Store Customer Map Row) |
+| Selling unit | UOM | Connector Settings `uom_map` (RT Uom Map Row) |
+| Tender method (`cash`, `card_external`) | Mode of Payment | Connector Settings `tender_mode_map` (RT Tender Mode Map Row); optional, an unmapped tender on a tender-bearing sale is rejected |
+| Product | Item | Not configured here: Backend-Core supplies `erpnextItemRef` on each line |
+| Sale provenance | Custom Fields `rt_source_system`, `rt_external_id`, `rt_sale_ref` on Sales Invoice and `rt_line_ref` on Sales Invoice Item | Fixtures in `hooks.py` |
 
-### 001 — Frappe App Foundation
+An empty store, warehouse or UOM map pauses posting (logged as `posting.poll.skipped`) so sales stay
+pending in Backend-Core rather than being mass-rejected.
 
-Create the custom Frappe app foundation.
+### Connector Settings and DocTypes
 
-Scope:
+| DocType | Kind | Purpose |
+| --- | --- | --- |
+| Connector Settings | Single | `dp2_base_url`; `dp2_token` (Password field); credential lifecycle fields `dp2_connector_registration_id`, `dp2_credential_id`, `dp2_credential_issued_at`, `dp2_credential_expires_at`, `dp2_credential_warn_days`; the four map tables |
+| Posting Log | Standard | Idempotency record: `source_system`, `external_id`, `document_doctype`, `document_name`, `sale_ref`, `outcome`, `correlation_id` |
+| RT Uom / Warehouse / Store Customer / Tender Mode Map Row | Child tables | Rows of the four maps above |
 
-- Frappe app scaffold.
-- App metadata.
-- Install policy.
-- Version pinning policy.
-- Connector Settings DocType placeholder.
-- Local/staging setup notes.
-- No ERP business mutation yet.
+Exactly-once posting (Gate G5) rests on two composite unique indexes: `unique_rt_posting_idem` on
+Posting Log `(source_system, external_id)` and `unique_rt_si_provenance` on Sales Invoice
+`(rt_source_system, rt_external_id)`.
 
-Exit criteria:
+### Known gaps and gated work
 
-- App can be installed on a staging ERPNext site.
-- App metadata is clear.
-- No product, stock, or sales mutation exists.
-- Upgrade policy is documented.
-
-### 002 — DocType Mapping Reference
-
-Document how ERPNext concepts map to Retail Tower concepts.
-
-Mapping areas:
-
-- Company ↔ Tenant.
-- Warehouse ↔ Store / Branch.
-- Item ↔ Product.
-- Barcode ↔ Product alias / scan code.
-- UOM ↔ Retail selling unit.
-- Price List ↔ Retail price source.
-- POS Invoice / Sales Invoice ↔ Retail sale.
-- Payment Entry ↔ Tender settlement.
-- Return Invoice ↔ Refund / return flow.
-
-Exit criteria:
-
-- Mapping matrix is reviewed.
-- Ambiguous mappings are recorded as decisions.
-- No implementation starts before required decisions are signed.
-
-### 003 — Data-Pulse Auth and API Policy
-
-Define the secure integration contract between Data-Pulse-2 and this connector.
-
-Scope:
-
-- Service authentication model.
-- Token storage policy.
-- IP restriction policy if applicable.
-- Request/response envelope.
-- Error taxonomy.
-- Idempotency requirements.
-- Correlation ID requirements.
-- Rate-limit and retry policy.
-
-Exit criteria:
-
-- Data-Pulse can authenticate to the connector in staging.
-- Secrets are not exposed in logs or UI.
-- Auth model is documented before business endpoints are implemented.
-
-### 004 — Product and Price Export
-
-Expose ERPNext product and pricing information to Data-Pulse.
-
-Scope:
-
-- Item export.
-- Barcode export.
-- UOM export.
-- Price List export.
-- Active/inactive item state.
-- Product update detection.
-- Data-Pulse pull or push strategy.
-
-Exit criteria:
-
-- Data-Pulse can build a canonical catalog from ERPNext data.
-- Missing price and inactive product states are explicit.
-- POS-Pulse still receives catalog through Data-Pulse only.
-
-### 005 — Inventory Export and Reservation
-
-Expose ERPNext warehouse stock information safely.
-
-Scope:
-
-- Warehouse/store mapping.
-- Stock snapshot export.
-- Stock availability policy.
-- Reservation/projection policy if approved.
-- Stock reconciliation references.
-- Stale data handling.
-
-Exit criteria:
-
-- Data-Pulse can show branch stock availability.
-- Stale stock is visible.
-- No direct POS stock mutation exists.
-- Stock impact model is signed before mutation behavior.
-
-### 006 — Sales Posting Adapter
-
-Create ERPNext sales documents from validated Data-Pulse sale commands.
-
-Scope:
-
-- POS Invoice or Sales Invoice creation.
-- Payment method mapping.
-- ERP reference persistence.
-- Idempotency protection.
-- Retry-safe posting.
-- Failure classification.
-- Posting status response.
-
-Exit criteria:
-
-- Same sale replay does not create duplicate ERP documents.
-- Failed posting is repairable without modifying the original sale fact.
-- ERP document reference is returned to Data-Pulse.
-
-### 007 — Tax and Fiscal Fields Egypt
-
-Support tax and fiscal extension points required for Egyptian retail operations.
-
-Scope:
-
-- VAT field mapping.
-- Tax category mapping.
-- Receipt/invoice fiscal fields.
-- Tax total validation.
-- Regional compliance extension points.
-- Golden fiscal test fixtures.
-
-Exit criteria:
-
-- Receipt tax equals Data-Pulse sale tax equals ERP invoice tax.
-- Fiscal fields are documented.
-- Customer-facing production is blocked until the fiscal gate passes.
-
-### 008 — Upgrade and Compatibility Runbook
-
-Document safe upgrade and compatibility rules.
-
-Scope:
-
-- ERPNext version pinning.
-- Frappe version pinning.
-- Staging upgrade workflow.
-- Backup and restore steps.
-- Connector regression checklist.
-- Rollback policy.
-- Compatibility matrix.
-
-Exit criteria:
-
-- Staging upgrade path is documented.
-- Backup/restore is rehearsed.
-- Connector regression checks are defined.
-- Production upgrades require explicit approval gates.
+- **Tax and fiscal (Egypt) is not built.** No tax rows are posted (VAT is treated as 0 today), and a
+  partial-return line with a non-zero tax amount is rejected rather than posted with the tax dropped.
+  Customer-facing fiscal production stays blocked until receipt tax, Backend-Core sale tax and ERP
+  invoice tax agree (gate G6).
+- **Refunds and receivables.** Amount-only refunds are rejected (above). Receivables, claims and
+  third-party posting (spec 009) are planning only.
+- **No health-reporting or product-reconciliation client.** The connector calls only the posting feed
+  (`/api/connector/v1/erpnext/postings`) and the bin-view requests
+  (`/api/connector/v1/erpnext/bin-view-requests`); it implements no connector-health, product-master
+  or reconciliation pollers.
+- **Bench-only validation.** Anything that imports `frappe` is validated on a staging ERPNext v15
+  bench, not locally. Live cross-system validation against a staging ERPNext remains the external
+  frontier.
+- **Documentation lag.** Several docs and spec headers still describe the original docs-only scaffold.
 
 ---
 
-## Delivery Waves
-
-| Wave | Purpose | Connector Responsibility |
-|---:|---|---|
-| 0 | Governance and truth reconciliation | Confirm repo name, app name, and boundaries |
-| 1 | ERPNext reference lab | Support ERPNext behavior mapping |
-| 2 | Connector skeleton and secure channel | Create custom app foundation and auth path |
-| 3 | Product/catalog source of truth | Export product, barcode, UOM, and pricing data |
-| 4 | Inventory and stock truth | Export warehouse/store stock information |
-| 5 | POS sale sync and ERP posting | Create ERP sales documents safely |
-| 6 | VAT/fiscal hardening | Support tax and fiscal fields |
-| 7 | Console operational UI | Provide status/errors to Data-Pulse for Console |
-| 8 | Returns, refunds, shifts, cash control | Support return and closing behavior |
-| 9 | Pilot and rollout | Support staging, backup, rollback, and regression |
-
----
-
-## Quality Gates
-
-| Gate | Name | Connector Evidence |
-|---|---|---|
-| G1 | Reference sign-off | ERPNext behavior map and DocType mapping reviewed |
-| G2 | Contract gate | Data-Pulse connector contract approved |
-| G3 | Migration gate | Additive migrations and rollback notes reviewed |
-| G4 | Security gate | Auth, token storage, and tenant isolation verified |
-| G5 | Idempotency gate | Replay does not duplicate ERP documents |
-| G6 | Tax/fiscal gate | Tax totals match across POS, Data-Pulse, and ERPNext |
-| G7 | Observability gate | Failures, retries, logs, and correlation IDs available |
-| G8 | Upgrade gate | Staging upgrade and regression checklist passed |
-| G9 | Pilot gate | One-branch pilot completed with rollback rehearsal |
-
----
-
-## Development Principles
+## Development principles
 
 - Keep the connector small and explicit.
-- Treat ERPNext as the ERP/accounting/inventory backend.
-- Treat Data-Pulse-2 as the only Retail Tower orchestration boundary.
-- Keep POS-Pulse isolated from Frappe.
-- Prefer additive changes.
-- Preserve auditability.
-- Make every mutation idempotent.
-- Make every failure observable.
+- Treat ERPNext as the ERP, accounting and inventory backend.
+- Treat Backend-Core as the only Retail Tower orchestration boundary.
+- Prefer additive, upgrade-safe changes.
+- Preserve auditability: every mutation is idempotent and every failure observable.
 - Never hide tax or stock uncertainty.
 - Upgrade through staging, never directly in production.
 
----
+Governing documents: [constitution](.specify/memory/constitution.md) ·
+[standing rules](docs/agent-os/standing-rules.md). The unit of work is a Jira issue (project RT);
+start from `origin/main` and keep changes to the issue's scope.
 
-## Suggested Initial Repository Structure
+## Getting started
 
-The target docs-and-app layout (some entries are planned, not all present yet):
+**Install on a staging bench** (Frappe v15 / ERPNext v15; full steps in the
+[staging install runbook](docs/runbooks/staging-install.md)):
 
-```text
-.
-├── README.md
-├── docs/
-│   ├── architecture/
-│   │   ├── boundaries.md
-│   │   └── doctype-mapping-reference.md
-│   ├── decisions/
-│   │   ├── posting-model.md
-│   │   ├── stock-impact-model.md
-│   │   ├── tax-fiscal-model.md
-│   │   └── version-pin-upgrade-policy.md
-│   ├── runbooks/
-│   │   ├── staging-install.md
-│   │   ├── backup-restore.md
-│   │   └── upgrade-compatibility.md
-│   └── specs/
-│       ├── 001-frappe-app-foundation.md
-│       ├── 002-doctype-mapping-reference.md
-│       ├── 003-data-pulse-auth-and-api-policy.md
-│       ├── 004-product-and-price-export.md
-│       ├── 005-inventory-export-and-reservation.md
-│       ├── 006-sales-posting-adapter.md
-│       ├── 007-tax-and-fiscal-fields-egypt.md
-│       └── 008-upgrade-and-compatibility-runbook.md
-└── retail_tower_erpnext_connector/
-    └── README.md
+```bash
+bench get-app retail_tower_erpnext_connector <repo-url>
+bench --site <staging-site> install-app retail_tower_erpnext_connector
+bench --site <staging-site> migrate
+bench --site <staging-site> run-tests --app retail_tower_erpnext_connector
 ```
 
----
+Then fill in Connector Settings (endpoint, token, the maps). Before the first sale also follow the
+site-preparation and Gate G5 index checks in the runbook, and the
+[upgrade and compatibility runbook](docs/runbooks/upgrade-compatibility.md) for later upgrades.
 
-## Current Status
+**Run the frappe-free tests locally** (no bench needed; requires `pytest`):
 
-> Snapshot — verify against `specs/<id>/wave-status.md` and GitHub `main` before acting; chat memory is advisory, the repo is source of truth.
+```bash
+python3 -m pytest --ignore=retail_tower_erpnext_connector/tests/test_foundation.py
+```
 
-The connector is no longer LICENSE+README scaffolding — it is a real, actively-built Frappe app
-with a **live posting loop** and a **live bin-view read leg**.
+`test_foundation.py` imports `frappe` and runs only on a bench. At the baseline below the remaining
+suite collects and passes locally (573 tests). Lint configuration (`ruff`) lives in
+[`pyproject.toml`](pyproject.toml). This repository has no CI workflow on `main`, so run these checks
+yourself.
 
-| Spec | Title | State |
-|---|---|---|
-| **001** | Frappe App Foundation | ✅ Shipped — app scaffold, metadata, `Connector Settings` Single DocType, install/version-pin/upgrade docs |
-| **002** | DocType Mapping Reference | ✅ Shipped — ERPNext ↔ Retail Tower mapping matrix; ambiguities recorded as signed decision records |
-| **003** | Data-Pulse Auth & API Policy | ✅ Shipped — connector authenticates **to** DP2 as a machine principal; HTTP client (pull/ack); G4 security gate |
-| **004** | Product ↔ ERPNext Item Mapping | ✅ Shipped — `specs/004-product-erpnext-item-mapping/` |
-| **006** | Sales Posting Adapter | ✅ Shipped — posting poller active (`scheduler_events`); idempotent Sales Invoice creation; G5 dedup closed |
-| **019** | ERPNext Bin-View Client | ✅ Live — `connector/bin_view/poller.py` pulls ERPNext Bin and reports stock back to DP2 (PR #25) |
+## Repository map
 
-**What runs today.** `hooks.py` registers
-`retail_tower_erpnext_connector.connector.posting.poller.run_posting_poll` under
-`scheduler_events`. The poller reads `Connector Settings` (`dp2_base_url`, `dp2_token`, UOM map,
-warehouse map, store→Customer map), pulls pending postings from DP2's feed (capture-UP), resolves
-each line to a confirmed ERPNext Item, posts an **idempotent** Sales Invoice (replay-safe via a
-unique index), and acks the outcome. The bin-view client supplies the reverse read leg for stock
-reconciliation. ERPNext is never forked and its core is never copied.
+| Path | Purpose |
+| --- | --- |
+| `retail_tower_erpnext_connector/hooks.py` | Fixtures, install/migrate hooks, scheduler cron entries |
+| `retail_tower_erpnext_connector/connector/posting/` | Sales posting: contracts, builders, idempotency, policies, transport, worker, Frappe glue, poller |
+| `retail_tower_erpnext_connector/connector/bin_view/` | Bin-view client: contracts, transport, worker, retry set, Frappe glue, poller |
+| `retail_tower_erpnext_connector/connector/doctype/` | Connector Settings, Posting Log and map-row DocTypes |
+| `retail_tower_erpnext_connector/patches/`, `fixtures/` | Unique-index patches and provenance Custom Fields |
+| `retail_tower_erpnext_connector/tests/` | Pure-Python tests plus bench-only `test_foundation.py` |
+| `docs/` | [Architecture](docs/architecture), [decisions](docs/decisions), [runbooks](docs/runbooks), [standing rules](docs/agent-os/standing-rules.md), assets |
+| `specs/` | Spec Kit artifacts per feature. Design records, not the authority for current behavior |
+| `.specify/` | Constitution and Spec Kit templates |
 
-**Frontier (external / gated).** The remaining work is cross-system live validation against an
-ERPNext-major staging site, plus the **tax/fiscal Egypt** gate (spec 007 / G6): customer-facing
-fiscal production is blocked until receipt tax = DP2 sale tax = ERP invoice tax. Treat live ERPNext
-validation as the next milestone, not another in-repo slice.
+**Baseline for this README:** `origin/main` at `3e23aa3` (RT-176, paged Bin read). Re-verify against
+`main` before relying on it.
 
-Built via spec-driven development (`.specify/`): constitution at `.specify/memory/constitution.md`;
-per-spec artifacts under `specs/<id>/` (spec → plan → tasks → analyze). Staging install:
-`docs/runbooks/staging-install.md` (install / verify / `run-tests` on a staging ERPNext v15 bench).
-
----
-
-## Related Repositories
+## Related repositories
 
 | Repository | Role |
-|---|---|
-| [Retail-Tower-Orchestrator](https://github.com/ahmed-shaaban-94/Retail-Tower-Orchestrator) | Docs-only cross-repo control plane (gates, roadmap, status). |
-| Data-Pulse-2 | Retail Tower backend, contracts, orchestration, and APIs. |
-| POS-Pulse | Windows offline-capable cashier terminal. |
-| Retail-Tower-Console | Frontend-only admin and operations console. |
-| **Retail-Tower-ERPNext-Connector** | **This repository** — custom Frappe / ERPNext connector. |
-
----
+| --- | --- |
+| [Orchestrator](https://github.com/Kemetra/Orchestrator) | Technical handbook: architecture, ADRs, gates, runbooks. Not a work queue. |
+| [Backend-Core](https://github.com/Kemetra/Backend-Core) | Backend, OpenAPI contracts, orchestration and the single contract boundary (Data-Pulse-2). |
+| [POS](https://github.com/Kemetra/POS) | Windows offline-capable cashier terminal. |
+| [Admin-Console](https://github.com/Kemetra/Admin-Console) | Admin and operations frontend. |
+| **ERPNext-Connector** | **This repository**: the only ERPNext / Frappe adapter. |
 
 ## License
 
-Private / internal Retail Tower OS project unless stated otherwise.
+MIT. See [LICENSE](LICENSE).
