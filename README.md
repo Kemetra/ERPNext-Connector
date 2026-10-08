@@ -297,7 +297,17 @@ Posting Log `(source_system, external_id)` and `unique_rt_si_provenance` on Sale
 
 ## Spec roadmap and delivery waves
 
-> **Planning reference, kept on purpose.** The constitution's Development Workflow section says delivery follows the spec roadmap (001–008) and delivery waves 0–9 defined in this README, so they stay here unchanged from `main`. They describe the plan, not what is implemented; see [Current implementation status](#current-implementation-status) for that.
+> **Planning reference, kept on purpose.** The constitution's Development Workflow section says delivery follows the spec roadmap (001–008) and delivery waves 0–9 defined in this README, so they stay here unchanged from `main`. They describe the original plan, not what is implemented; see [Current implementation status](#current-implementation-status) for that.
+>
+> **The roadmap numbers and the `specs/` folders have diverged.** Where they disagree, the `specs/` folder, the signed decisions under `docs/decisions/` and the constitution's principles decide what is built; the roadmap entry below is history. Reconciling the constitution's reference to this roadmap is a governance amendment and is deliberately not done in this README-only change.
+>
+> | Roadmap entry | What `specs/` actually holds |
+> | --- | --- |
+> | 004 Product and Price Export | `004-product-erpnext-item-mapping`: the connector applies a pre-resolved Item and exports no products or prices (barred by the contract and the constitution) |
+> | 005 Inventory Export and Reservation | No spec folder yet; the stock-view (Bin) client was built under the Backend-Core stock-view contract |
+> | 007 Tax and Fiscal Fields Egypt | No spec folder yet (gate G6 not passed). `007-connector-admin-counterpart` reuses the number for the credential-lifecycle subset |
+> | 008 Upgrade and Compatibility Runbook | No spec folder yet; see the [upgrade runbook](docs/runbooks/upgrade-compatibility.md) |
+> | not in the roadmap | `009-receivables-and-third-party-posting-adapter` (planning only) |
 
 ## Initial spec roadmap
 
@@ -525,8 +535,14 @@ start from `origin/main` and keep changes to the issue's scope.
 bench get-app retail_tower_erpnext_connector <repo-url>
 bench --site <staging-site> install-app retail_tower_erpnext_connector
 bench --site <staging-site> migrate
-bench --site <staging-site> run-tests --app retail_tower_erpnext_connector
 ```
+
+`bench run-tests` is not a reliable verification step yet: the posting tests import `pytest`, which
+the bench does not install and `pyproject.toml` does not declare, so collection aborts with
+`ModuleNotFoundError` (recorded in
+[`specs/006-sales-posting-adapter/wave-status.md`](specs/006-sales-posting-adapter/wave-status.md)).
+Install `pytest` in the bench environment first, or use the frappe-free suite below; behaviour that
+needs `frappe` is checked by hand on the staging site.
 
 Then fill in Connector Settings (endpoint, token, the maps). Before the first sale also follow the
 site-preparation and Gate G5 index checks in the runbook, and the
