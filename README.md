@@ -28,14 +28,16 @@
   <a href="#-one-project-four-tracks"><b>Tracks</b></a> &nbsp;·&nbsp;
   <a href="#-ai-is-native-to-the-architecture-and-the-design"><b>AI</b></a> &nbsp;·&nbsp;
   <a href="#current-implementation-status"><b>Status</b></a> &nbsp;·&nbsp;
-  <a href="#-synchronization--the-only-path-to-erpnext"><b>Sync</b></a> &nbsp;·&nbsp;
+  <a href="docs/architecture/synchronization.md"><b>Sync</b></a> &nbsp;·&nbsp;
   <a href="#getting-started"><b>Get started</b></a> &nbsp;·&nbsp;
   <a href="docs/architecture"><b>Docs</b></a>
 </p>
 
 </div>
 
-> **Retail Tower OS** is the product; this repository, [`Kemetra/ERPNext-Connector`](https://github.com/Kemetra/ERPNext-Connector), is its ERPNext integration track and the only ERPNext/Frappe adapter. It talks to [`Kemetra/Backend-Core`](https://github.com/Kemetra/Backend-Core) only; the cashier terminal ([`Kemetra/POS`](https://github.com/Kemetra/POS)) and the operator frontend ([`Kemetra/Admin-Console`](https://github.com/Kemetra/Admin-Console)) never reach ERPNext directly.
+> **Retail Tower OS** is the product; this repository, [`Kemetra/ERPNext-Connector`](https://github.com/Kemetra/ERPNext-Connector), is its ERPNext integration track and the only ERPNext/Frappe adapter. It talks to [`Kemetra/Backend-Core`](https://github.com/Kemetra/Backend-Core) only.
+>
+> *Also known as:* Data-Pulse-2 / DP2 = Backend-Core; POS-Pulse = POS; Retail-Tower-Console = Admin-Console. Code and configuration still use the `dp2_*` names (for example the `dp2_base_url` setting).
 
 ---
 
@@ -52,7 +54,7 @@
 | **Admin-Console** | [`Kemetra/Admin-Console`](https://github.com/Kemetra/Admin-Console) | Operator web UI · catalog · inventory views · sync ops |
 | **ERPNext-Connector** ◀ you are here | [`Kemetra/ERPNext-Connector`](https://github.com/Kemetra/ERPNext-Connector) | The only ERPNext/Frappe adapter · DocType mapping · posting |
 
-<sub>One architecture, one set of contracts, one AI-embedded design. <a href="https://github.com/Kemetra/Orchestrator"><code>Kemetra/Orchestrator</code></a> is the technical handbook, not a track.</sub>
+<sub>One architecture, one set of contracts, one AI-embedded design. POS and Admin-Console both synchronize through Backend-Core, the single contract boundary, which alone reaches ERPNext through this connector ([synchronization detail](docs/architecture/synchronization.md)). <a href="https://github.com/Kemetra/Orchestrator"><code>Kemetra/Orchestrator</code></a> is the technical handbook, not a track.</sub>
 
 ---
 
@@ -75,79 +77,26 @@
 
 ---
 
-## Purpose
+## Role and boundaries
 
 Retail Tower OS uses ERPNext as its ERP, accounting and inventory reference system, but ERPNext
 does **not** replace the Retail Tower operational applications. This connector keeps the ERPNext
-integration isolated, versioned, testable and upgrade-safe.
-
-The integration rule is one direction, through one boundary:
-
-```text
-POS            ──▶  Backend-Core  ──▶  Retail Tower ERPNext Connector  ──▶  ERPNext / Frappe
-Admin-Console  ──▶  Backend-Core  ──▶  Retail Tower ERPNext Connector  ──▶  ERPNext / Frappe
-ERPNext POS behavior  ──▶  Reference only
-```
-
-> **Naming.** Program shorthand and legacy names refer to the same repositories: Data-Pulse-2 / DP2 =
-> [`Kemetra/Backend-Core`](https://github.com/Kemetra/Backend-Core); POS-Pulse =
-> [`Kemetra/POS`](https://github.com/Kemetra/POS); Retail-Tower-Console =
-> [`Kemetra/Admin-Console`](https://github.com/Kemetra/Admin-Console). Code and configuration in this
-> repository still use the `dp2` / `Data-Pulse-2` names (for example the `dp2_base_url` setting).
-
----
-
-## 🔗 Synchronization — the only path to ERPNext
-
-The connector is the **only** component allowed to touch ERPNext. It pulls posting work items from
-Backend-Core's posting feed (capture-UP), applies the ERPNext Item reference that Backend-Core has
-already resolved for each line, posts the document to ERPNext, and acknowledges the outcome. It
-also answers Backend-Core's stock-view requests by reading ERPNext Bin on-hand and reporting it back.
-It never forks ERPNext, copies its core, or exports catalog out of ERPNext.
-
-<p align="center">
-  <img src="docs/assets/architecture/retail-tower-sync-flow.svg" alt="Animated Retail Tower OS synchronization diagram, connector focus" width="100%"/>
-</p>
-
-```text
-Backend-Core  ──▶  Retail Tower ERPNext Connector  ──▶  ERPNext / Frappe
-```
-
-### Where the Connector sits — the full ecosystem
-
-The diagram below places the connector within the complete five-repository Retail Tower OS
-ecosystem: the **Orchestrator** control-plane band on top, governing the four delivery repositories
-beneath it. POS and Admin-Console both synchronize through Backend-Core, the single contract
-boundary, which alone reaches ERPNext through this connector.
-
-<p align="center">
-  <img src="docs/assets/architecture/retail-tower-ecosystem.svg" alt="Retail Tower OS ecosystem diagram: an Orchestrator control-plane band over five repositories, with POS and Admin-Console synchronizing through Backend-Core to the ERPNext Connector and ERPNext" width="100%"/>
-</p>
-
-<p align="center">
-  <em>The ERPNext Connector — <strong>this repository</strong> — is the highlighted ERPNext-facing node.
-  The diagram is a live animated SVG that honors <code>prefers-reduced-motion</code>.</em>
-</p>
-
-Full detail: [docs/architecture/synchronization.md](docs/architecture/synchronization.md) ·
-Program technical handbook: [Orchestrator](https://github.com/Kemetra/Orchestrator).
-
----
-
-## Repository role
+integration isolated, versioned, testable and upgrade-safe. It is the **only** component allowed to
+touch ERPNext, and the integration rule is one direction, through one boundary: Backend-Core (see the
+tracks diagram above).
 
 This repository owns the custom Frappe app `retail_tower_erpnext_connector`. It owns:
 
 - the ERPNext / Frappe custom app foundation and its install / upgrade policy;
 - Connector Settings: Backend-Core endpoint, credential references and the posting maps;
 - authentication **to** Backend-Core as a machine principal (the connector is the client; Backend-Core makes no outbound calls);
-- the sales posting adapter (Sales Invoice, void credit note, partial return) with idempotency and failure classification;
-- the stock-view (Bin) read-and-report leg;
+- the sales posting adapter (Sales Invoice, void credit note, partial return): it pulls posting work items from Backend-Core's posting feed (capture-UP), applies the ERPNext Item reference that Backend-Core has already resolved for each line, posts the document to ERPNext and acknowledges the outcome, with idempotency and failure classification;
+- the stock-view (Bin) read-and-report leg: it answers Backend-Core's stock-view requests by reading ERPNext Bin on-hand and reporting it back;
 - ERPNext-specific mapping and extension points.
 
 ### Non-goals
 
-- Do not fork ERPNext, and do not copy ERPNext core code into this repository.
+- Do not fork ERPNext, do not copy ERPNext core code into this repository, and do not export catalog out of ERPNext.
 - Do not implement the POS cashier UI or the Admin-Console here.
 - Do not let POS or Admin-Console call Frappe directly.
 - Do not bypass Backend-Core contracts.
@@ -267,6 +216,10 @@ Posting Log `(source_system, external_id)` and `unique_rt_si_provenance` on Sale
 > | 007 Tax and Fiscal Fields Egypt | No spec folder yet (gate G6 not passed). `007-connector-admin-counterpart` reuses the number for the credential-lifecycle subset |
 > | 008 Upgrade and Compatibility Runbook | No spec folder yet; see the [upgrade runbook](docs/runbooks/upgrade-compatibility.md) |
 > | not in the roadmap | `009-receivables-and-third-party-posting-adapter` (planning only) |
+
+<details><summary><b>Roadmap entries, delivery waves and quality gates</b></summary>
+
+Historical names in the entries below: Data-Pulse = Backend-Core.
 
 ## Initial spec roadmap
 
@@ -467,7 +420,7 @@ Exit criteria:
 | G8 | Upgrade gate | Staging upgrade and regression checklist passed |
 | G9 | Pilot gate | One-branch pilot completed with rollback rehearsal |
 
----
+</details>
 
 ---
 
@@ -540,7 +493,7 @@ yourself.
 | Repository | Role |
 | --- | --- |
 | [Orchestrator](https://github.com/Kemetra/Orchestrator) | Technical handbook: architecture, ADRs, gates, runbooks. Not a work queue. |
-| [Backend-Core](https://github.com/Kemetra/Backend-Core) | Backend, OpenAPI contracts, orchestration and the single contract boundary (Data-Pulse-2). |
+| [Backend-Core](https://github.com/Kemetra/Backend-Core) | Backend, OpenAPI contracts, orchestration and the single contract boundary. |
 | [POS](https://github.com/Kemetra/POS) | Windows offline-capable cashier terminal. |
 | [Admin-Console](https://github.com/Kemetra/Admin-Console) | Admin and operations frontend. |
 | **ERPNext-Connector** | **This repository**: the only ERPNext / Frappe adapter. |
