@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 460" width="1280" height="460" role="img" aria-label="Two designs compared. AI-integrated: the AI sits outside the system boundary and reaches it through a side channel. AI-embedded: the AI runs through every layer inside the boundary, under the same rules.">
+<title>Two designs compared. AI-integrated: the AI sits outside the system boundary and reaches it through a side channel. AI-embedded: the AI runs through every layer inside the boundary, under the same rules.</title>
+
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#070b1f"/><stop offset=".55" stop-color="#0c1230"/><stop offset="1" stop-color="#060918"/>
+  </linearGradient>
+  <linearGradient id="aurora" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#22d3ee"/><stop offset=".5" stop-color="#a78bfa"/><stop offset="1" stop-color="#f472b6"/>
+  </linearGradient>
+  <linearGradient id="auroraV" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#22d3ee"/><stop offset=".5" stop-color="#a78bfa"/><stop offset="1" stop-color="#f472b6"/>
+  </linearGradient>
+  <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+    <path d="M32 0H0V32" fill="none" stroke="#94a3b8" stroke-opacity=".07" stroke-width="1"/>
+  </pattern>
+  <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+    <feGaussianBlur stdDeviation="6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+  <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="14"/></filter>
+  <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M1 1L9 5L1 9z" fill="#cbd5e1"/>
+  </marker>
+  <linearGradient id="g-pos" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3b82f6"/><stop offset="1" stop-color="#1e3a8a"/></linearGradient>
+  <linearGradient id="g-console" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#14b8a6"/><stop offset="1" stop-color="#0e7490"/></linearGradient>
+  <linearGradient id="g-core" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8b5cf6"/><stop offset="1" stop-color="#5b21b6"/></linearGradient>
+  <linearGradient id="g-connector" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f59e0b"/><stop offset="1" stop-color="#b45309"/></linearGradient>
+</defs>
+
+<style>
+  text{font-family:'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif}
+  .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}
+  .flow{stroke-dasharray:6 8;animation:flow 1.4s linear infinite}
+  .spark{stroke-dasharray:46 460;animation:spark 3.2s linear infinite}
+  .pulse{animation:pulse 2.6s ease-in-out infinite}
+  .beacon{animation:beacon 2s ease-in-out infinite}
+  @keyframes flow{to{stroke-dashoffset:-14}}
+  @keyframes spark{from{stroke-dashoffset:0}to{stroke-dashoffset:-506}}
+  @keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+  @keyframes beacon{0%,100%{opacity:.25;r:5}50%{opacity:1;r:8}}
+  @media (prefers-reduced-motion: reduce){*{animation:none!important}}
+</style>
+<rect width="1280" height="460" rx="20" fill="url(#bg)"/>
+<rect width="1280" height="460" rx="20" fill="url(#grid)"/>
+<circle cx="940" cy="230" r="230" fill="#7c3aed" opacity="0.22" filter="url(#soft)"/>
+<circle cx="300" cy="230" r="160" fill="#475569" opacity="0.12" filter="url(#soft)"/>
+<rect x=".5" y=".5" width="1279" height="459" rx="20" fill="none" stroke="#334155" stroke-opacity=".7"/>
+<line x1="640" y1="40" x2="640" y2="420" stroke="#334155" stroke-dasharray="4 6"/>
+<text x="40" y="52" font-size="13" font-weight="800" letter-spacing="3" fill="#94a3b8">AI-INTEGRATED</text>
+<text x="40" y="74" font-size="15" fill="#64748b">what Retail Tower OS is not</text>
+<text x="680" y="52" font-size="13" font-weight="800" letter-spacing="3" fill="url(#aurora)">AI-EMBEDDED</text>
+<text x="680" y="74" font-size="15" fill="#e2e8f0">what Retail Tower OS is</text>
+<rect x="48" y="100" width="380" height="262" rx="18" fill="none" stroke="#64748b" stroke-width="2" stroke-dasharray="7 6"/>
+<text x="238.0" y="384" text-anchor="middle" font-size="12" fill="#94a3b8" letter-spacing="1.5">TENANT ISOLATION · DEFAULT-DENY · AUDIT</text>
+<rect x="66" y="118" width="344" height="64" rx="12" fill="#0f172a" stroke="#475569"/>
+<text x="86" y="146" font-size="15" font-weight="700" fill="#fff">Experience</text>
+<text x="86" y="166" font-size="12" fill="#94a3b8">workflows · screens</text>
+<rect x="66" y="194" width="344" height="64" rx="12" fill="#0f172a" stroke="#475569"/>
+<text x="86" y="222" font-size="15" font-weight="700" fill="#fff">Contracts</text>
+<text x="86" y="242" font-size="12" fill="#94a3b8">APIs · tenant scope</text>
+<rect x="66" y="270" width="344" height="64" rx="12" fill="#0f172a" stroke="#475569"/>
+<text x="86" y="298" font-size="15" font-weight="700" fill="#fff">Data</text>
+<text x="86" y="318" font-size="12" fill="#94a3b8">events · audit trail</text>
+<rect x="520" y="190" width="96" height="84" rx="16" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>
+<text x="568" y="226" text-anchor="middle" font-size="22" font-weight="800" fill="#94a3b8">AI</text>
+<text x="568" y="250" text-anchor="middle" font-size="11" fill="#64748b">add-on</text>
+<path class="flow" d="M520 232 H446" fill="none" stroke="#f59e0b" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arr)"/>
+<text x="483" y="216" text-anchor="middle" font-size="11" font-weight="600" fill="#fbbf24">side channel</text>
+<g fill="none" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round"><path d="M422 222l12 20M434 222l-12 20"/></g>
+<text x="308" y="410" text-anchor="middle" font-size="13" fill="#94a3b8">outside the boundary · export and API glue · removable</text>
+<rect x="700" y="100" width="380" height="262" rx="18" fill="none" stroke="#a78bfa" stroke-width="2" stroke-dasharray="7 6"/>
+<text x="890.0" y="384" text-anchor="middle" font-size="12" fill="#94a3b8" letter-spacing="1.5">TENANT ISOLATION · DEFAULT-DENY · AUDIT</text>
+<rect x="718" y="118" width="344" height="64" rx="12" fill="#0f172a" stroke="#475569"/>
+<text x="738" y="146" font-size="15" font-weight="700" fill="#fff">Experience</text>
+<text x="738" y="166" font-size="12" fill="#94a3b8">workflows · screens</text>
+<rect x="718" y="194" width="344" height="64" rx="12" fill="#0f172a" stroke="#475569"/>
+<text x="738" y="222" font-size="15" font-weight="700" fill="#fff">Contracts</text>
+<text x="738" y="242" font-size="12" fill="#94a3b8">APIs · tenant scope</text>
+<rect x="718" y="270" width="344" height="64" rx="12" fill="#0f172a" stroke="#475569"/>
+<text x="738" y="298" font-size="15" font-weight="700" fill="#fff">Data</text>
+<text x="738" y="318" font-size="12" fill="#94a3b8">events · audit trail</text>
+<rect x="968.0" y="110" width="4" height="234" rx="2.0" fill="url(#auroraV)" filter="url(#glow)"/>
+<line class="spark" x1="970.0" y1="110" x2="970.0" y2="344" stroke="#fff" stroke-width="3.5" stroke-linecap="round"/>
+<circle class="pulse" style="animation-delay:0.0s" cx="970.0" cy="150" r="14" fill="#0b1020" stroke="url(#aurora)" stroke-width="2.5"/>
+<text x="970.0" y="154.5" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">AI</text>
+<circle class="pulse" style="animation-delay:0.5s" cx="970.0" cy="226" r="14" fill="#0b1020" stroke="url(#aurora)" stroke-width="2.5"/>
+<text x="970.0" y="230.5" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">AI</text>
+<circle class="pulse" style="animation-delay:1.0s" cx="970.0" cy="302" r="14" fill="#0b1020" stroke="url(#aurora)" stroke-width="2.5"/>
+<text x="970.0" y="306.5" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">AI</text>
+<text x="890" y="410" text-anchor="middle" font-size="13" fill="#e2e8f0">inside the boundary · same rules, same audit · shapes the design</text>
+</svg>

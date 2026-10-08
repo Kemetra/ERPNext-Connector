@@ -1,118 +1,75 @@
 <div align="center">
 
-<img src="docs/assets/brand/connector-logo.svg" alt="Retail Tower ERPNext Connector logo" width="120" height="120"/>
-
-# Retail Tower ERPNext Connector
-
-**Retail Tower OS — the command tower for modern retail, with AI embedded in its architecture and design. This repository is its ERPNext integration track: the only component allowed to touch ERPNext.**
-
-The Retail Tower ERPNext Connector is a custom Frappe / ERPNext app that adapts ERPNext business
-documents into stable, idempotent postings driven by the contracts of Backend-Core (Data-Pulse-2).
+<img src="docs/assets/readme/hero.svg" alt="Retail Tower OS, ERPNext-Connector track: one product, four development tracks, with AI woven through all of them" width="100%"/>
 
 <p align="center">
-  <a href="pyproject.toml"><img alt="Platform: Frappe / ERPNext v15" src="https://img.shields.io/badge/platform-Frappe%20%2F%20ERPNext%20v15-0e7490?style=flat-square&logo=python&logoColor=white"></a>
-  <a href="https://github.com/Kemetra/ERPNext-Connector"><img alt="Repo: ERPNext Connector" src="https://img.shields.io/badge/repo-ERPNext%20Connector-181717?style=flat-square&logo=github&logoColor=white"></a>
-  <a href=".specify/memory/constitution.md"><img alt="Boundary: Backend-Core only" src="https://img.shields.io/badge/boundary-Backend--Core%20only-7c3aed?style=flat-square"></a>
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-059669?style=flat-square"></a>
+  <a href="#-one-project-four-tracks"><img alt="Retail Tower OS" src="https://img.shields.io/badge/Retail%20Tower-OS-0f766e?labelColor=0a0f24&style=flat-square"></a>
+  <a href="#-ai-is-native-to-the-architecture-and-the-design"><img alt="AI embedded by design" src="https://img.shields.io/badge/AI-embedded%20by%20design-a78bfa?labelColor=0a0f24&style=flat-square"></a>
+  <a href=".specify/memory/constitution.md"><img alt="Boundary: Backend-Core only" src="https://img.shields.io/badge/boundary-Backend--Core%20only-60a5fa?labelColor=0a0f24&style=flat-square"></a>
+  <a href="docs/decisions"><img alt="Posting: idempotent" src="https://img.shields.io/badge/posting-idempotent-14b8a6?labelColor=0a0f24&style=flat-square"></a>
+  <a href=".specify/memory/constitution.md"><img alt="ERPNext fork: never" src="https://img.shields.io/badge/ERPNext%20fork-never-f87171?labelColor=0a0f24&style=flat-square"></a>
+  <a href="retail_tower_erpnext_connector/connector/posting/poller.py"><img alt="Posting poller: every minute" src="https://img.shields.io/badge/posting%20poller-every%20minute-34d399?labelColor=0a0f24&style=flat-square"></a>
+  <a href="#known-gaps-and-gated-work"><img alt="Tax / fiscal gate: pending" src="https://img.shields.io/badge/tax%20%2F%20fiscal%20gate-pending-f59e0b?labelColor=0a0f24&style=flat-square"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-34d399?labelColor=0a0f24&style=flat-square"></a>
 </p>
 
 <p align="center">
-  <a href="retail_tower_erpnext_connector/connector/posting/poller.py"><img alt="Posting poller: every minute" src="https://img.shields.io/badge/posting%20poller-every%20minute-059669?style=flat-square"></a>
-  <a href="retail_tower_erpnext_connector/connector/bin_view/poller.py"><img alt="Bin-view poller: every 5 minutes" src="https://img.shields.io/badge/bin--view%20poller-every%205%20min-2563eb?style=flat-square"></a>
-  <a href="retail_tower_erpnext_connector/hooks.py"><img alt="Transport: pull / feed + ack" src="https://img.shields.io/badge/transport-pull%20%2F%20feed%20%2B%20ack-0e7490?style=flat-square"></a>
-  <a href="#current-implementation-status"><img alt="Specs: 001-004, 006-007 implemented" src="https://img.shields.io/badge/specs-001%E2%80%93004%2C%20006%E2%80%93007%20implemented-059669?style=flat-square"></a>
+  <a href="docs/decisions/version-pin-upgrade-policy.md"><img alt="Frappe v15" src="https://img.shields.io/badge/Frappe-v15-0089ff?logo=frappe&logoColor=white&labelColor=0a0f24&style=flat-square"></a>
+  <a href="docs/decisions/version-pin-upgrade-policy.md"><img alt="ERPNext v15" src="https://img.shields.io/badge/ERPNext-v15-0e7490?labelColor=0a0f24&style=flat-square"></a>
+  <a href="pyproject.toml"><img alt="Python 3.10+" src="https://img.shields.io/badge/python-%E2%89%A53.10-3776ab?logo=python&logoColor=white&labelColor=0a0f24&style=flat-square"></a>
+  <a href="retail_tower_erpnext_connector/hooks.py"><img alt="Transport: pull feed and ack" src="https://img.shields.io/badge/transport-pull%20feed%20%2B%20ack-60a5fa?labelColor=0a0f24&style=flat-square"></a>
+  <a href="#what-the-connector-posts-today"><img alt="ERP posting: Sales Invoice and returns" src="https://img.shields.io/badge/ERP%20posting-Sales%20Invoice%20%2B%20returns-b45309?labelColor=0a0f24&style=flat-square"></a>
+  <a href="retail_tower_erpnext_connector/connector/bin_view/poller.py"><img alt="Bin-view poller: every 5 minutes" src="https://img.shields.io/badge/bin--view%20poller-every%205%20min-2563eb?labelColor=0a0f24&style=flat-square"></a>
 </p>
 
 <p align="center">
-  <a href="docs/decisions"><img alt="Posting: idempotent" src="https://img.shields.io/badge/posting-idempotent-0f766e?style=flat-square"></a>
-  <a href="#what-the-connector-posts-today"><img alt="ERP posting: Sales Invoice + return Sales Invoice" src="https://img.shields.io/badge/ERP%20posting-Sales%20Invoice%20%2B%20returns-b45309?style=flat-square"></a>
-  <a href=".specify/memory/constitution.md"><img alt="ERPNext fork: never" src="https://img.shields.io/badge/ERPNext%20fork-never-dc2626?style=flat-square"></a>
-  <a href="#known-gaps-and-gated-work"><img alt="Tax / fiscal: not built" src="https://img.shields.io/badge/tax%20%2F%20fiscal-not%20built-f59e0b?style=flat-square"></a>
-  <a href="#-ai-embedded-by-design"><img alt="AI: embedded by design" src="https://img.shields.io/badge/AI-embedded%20by%20design-8b5cf6?style=flat-square"></a>
+  <a href="#-one-project-four-tracks"><b>Tracks</b></a> &nbsp;·&nbsp;
+  <a href="#-ai-is-native-to-the-architecture-and-the-design"><b>AI</b></a> &nbsp;·&nbsp;
+  <a href="#current-implementation-status"><b>Status</b></a> &nbsp;·&nbsp;
+  <a href="#-synchronization--the-only-path-to-erpnext"><b>Sync</b></a> &nbsp;·&nbsp;
+  <a href="#getting-started"><b>Get started</b></a> &nbsp;·&nbsp;
+  <a href="docs/architecture"><b>Docs</b></a>
 </p>
 
 </div>
 
+> **Retail Tower OS** is the product; this repository, [`Kemetra/ERPNext-Connector`](https://github.com/Kemetra/ERPNext-Connector), is its ERPNext integration track and the only ERPNext/Frappe adapter. It talks to [`Kemetra/Backend-Core`](https://github.com/Kemetra/Backend-Core) only; the cashier terminal ([`Kemetra/POS`](https://github.com/Kemetra/POS)) and the operator frontend ([`Kemetra/Admin-Console`](https://github.com/Kemetra/Admin-Console)) never reach ERPNext directly.
+
 ---
 
-## 🧩 One project, four development tracks
+## 🧩 One project, four tracks
 
-**Retail Tower OS is one product.** Its four repositories are development divisions, split by
-responsibility so that each can be built, tested and released independently. They are not separate
-products: there is one architecture, one set of contracts and one AI-embedded design.
+<p align="center">
+  <img src="docs/assets/readme/tracks.svg" alt="Data flow: POS and Admin-Console talk to Backend-Core, which feeds the ERPNext-Connector, the only path to ERPNext. An AI layer runs through all four tracks." width="100%"/>
+</p>
 
-| Track | Repository | Responsibility |
+| Track | Repository | Owns |
 | --- | --- | --- |
-| Backend-Core | [`Kemetra/Backend-Core`](https://github.com/Kemetra/Backend-Core) | Contract and orchestration boundary: APIs, data, workers, tenant/store context, sync operations |
-| POS | [`Kemetra/POS`](https://github.com/Kemetra/POS) | Windows cashier terminal: Electron app, offline state, receipts, POS to Backend-Core sync |
-| Admin-Console | [`Kemetra/Admin-Console`](https://github.com/Kemetra/Admin-Console) | Admin/operator web frontend: tenant/store operations, catalog, inventory views, sync operations |
-| ERPNext-Connector | [`Kemetra/ERPNext-Connector`](https://github.com/Kemetra/ERPNext-Connector) | The only ERPNext/Frappe adapter: DocType mapping and posting **◀ you are here** |
+| **Backend-Core** | [`Kemetra/Backend-Core`](https://github.com/Kemetra/Backend-Core) | APIs · data · workers · tenant/store context · sync operations |
+| **POS** | [`Kemetra/POS`](https://github.com/Kemetra/POS) | Windows cashier terminal · offline state · receipts |
+| **Admin-Console** | [`Kemetra/Admin-Console`](https://github.com/Kemetra/Admin-Console) | Operator web UI · catalog · inventory views · sync ops |
+| **ERPNext-Connector** ◀ you are here | [`Kemetra/ERPNext-Connector`](https://github.com/Kemetra/ERPNext-Connector) | The only ERPNext/Frappe adapter · DocType mapping · posting |
 
-```text
-POS / Admin-Console -> Backend-Core -> ERPNext-Connector -> ERPNext / Frappe
-```
-
-[`Kemetra/Orchestrator`](https://github.com/Kemetra/Orchestrator) is the technical handbook
-(architecture, ADRs, runbooks). It is not a track and holds no application code.
+<sub>One architecture, one set of contracts, one AI-embedded design. <a href="https://github.com/Kemetra/Orchestrator"><code>Kemetra/Orchestrator</code></a> is the technical handbook, not a track.</sub>
 
 ---
 
-## 🧠 AI-embedded by design
+## 🧠 AI is native to the architecture and the design
 
-Retail Tower OS is **AI-embedded**, not AI-integrated. AI is a founding part of the product's
-**architecture and design**: native from the inside, not a layer added on top and not merely an
-integration with an external service. It applies on two levels:
+<p align="center">
+  <img src="docs/assets/readme/ai-embedded.svg" alt="AI-integrated: the AI sits outside the boundary and reaches the system through a side channel. AI-embedded: the AI runs through every layer inside the boundary, under the same rules." width="100%"/>
+</p>
 
-- **Architecture.** Contracts, events, audit, tenant isolation and the data model are built so that
-  intelligent components can understand and act on them through the same boundaries as every other
-  component.
-- **Design.** Workflows and surfaces (the product and UX design of the cashier, operator and
-  integration experiences) are designed with intelligence as a native participant, while humans keep
-  authority.
+<table>
+<tr>
+<td width="25%" valign="top"><b>🔒 Same boundary</b><br/><sub>Talks to Backend-Core only: pull feed plus outcome acknowledgement. No direct path to ERPNext for anyone else, no side door.</sub></td>
+<td width="25%" valign="top"><b>🧾 Auditable</b><br/><sub>The ERPNext document carries source system, external id and sale reference as Custom Fields; the Posting Log records source system, external id, document reference and outcome.</sub></td>
+<td width="25%" valign="top"><b>🏢 Tenant-safe</b><br/><sub>Fail-closed on an unmapped store, unit, tender or Item: rejected with a structured reason, never guessed.</sub></td>
+<td width="25%" valign="top"><b>🧑‍⚖️ Human-governed</b><br/><sub>Authority, scope and approval stay with people. Operators own the mapping tables and credentials; AI works inside them.</sub></td>
+</tr>
+</table>
 
-| AI-integrated (what Retail Tower OS is **not**) | AI-embedded (what Retail Tower OS **is**) |
-| --- | --- |
-| AI is a feature bolted on top of an existing system | AI is a native layer of the system itself, in its architecture and its design |
-| Reads or writes ERP data through side channels or direct ERP access | Acts through the same Backend-Core contracts, work items and outcome acknowledgements as every other component |
-| Sits outside the audit and idempotency model | Runs inside it: idempotent posting, structured outcomes and correlation IDs apply to AI-driven actions like any other actor |
-| Can be removed without changing the architecture or the product design | Shapes both: explicit contracts, fail-closed validation and structured, auditable records are built to be understood and acted on by intelligent components |
-
-How each track carries it:
-
-| Track | Its part in the AI-embedded design |
-| --- | --- |
-| Backend-Core | Contracts, events and audit as the substrate |
-| POS | Cashier workflow and offline-first local state |
-| Admin-Console | Operator surfaces |
-| ERPNext-Connector (this repo) | ERP mapping and posting |
-
-What this means for the Connector:
-
-- **Same boundary, same rules.** The Connector stays the only ERPNext/Frappe adapter and talks to
-  Backend-Core only (pull feed plus outcome acknowledgement). AI-driven behavior gets no direct path
-  to ERPNext and no privileged side door.
-- **Contracts an intelligent component can read.** Work items, typed outcomes (`posted`,
-  `failed_transient`, `permanently_rejected`), closed rejection categories and exact-decimal money are
-  explicit and machine-readable, so a component can reason about a posting and its failure without
-  scraping ERPNext.
-- **Auditable by default.** Every posting keeps its provenance on the ERPNext document (source
-  system, external id and sale reference as Custom Fields), and the Posting Log records the
-  source system, external id, resulting document reference and outcome, so decisions made or assisted
-  by AI can be traced, reviewed and repaired.
-- **Fail closed, never guess.** An unmapped store, unit, tender or Item is rejected with a structured
-  reason rather than guessed. Intelligent components inherit the same discipline.
-- **Mapping and posting designed for assistance.** The mapping tables in Connector Settings and the
-  replay-safe, idempotent posting path are the points where intelligent assistance (for example
-  proposing a mapping or triaging a rejection) can attach without changing the boundary.
-- **Upgrade-safe.** No ERPNext fork and no ERPNext core code. Behavior is added only through
-  Frappe-supported extension mechanisms (custom app, fixtures, scheduler events).
-- **Human-governed.** Authority, scope and approval stay with people. Operators own the mapping
-  tables and credentials; AI works inside them.
-
-> AI-embedded describes the platform's architectural and design direction. **This repository contains
-> no AI-driven behavior today**; what is shipped is tracked in
-> [Current implementation status](#current-implementation-status) and the per-feature specs under
-> [`specs/`](specs).
+> AI-embedded describes the architectural and design direction. **This repository contains no AI-driven behavior today**; what is shipped is tracked in [Current implementation status](#current-implementation-status) and under [`specs/`](specs).
 
 ---
 
