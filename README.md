@@ -28,7 +28,7 @@
   <a href="#-one-project-four-tracks"><b>Tracks</b></a> &nbsp;·&nbsp;
   <a href="#-ai-is-native-to-the-architecture-and-the-design"><b>AI</b></a> &nbsp;·&nbsp;
   <a href="#current-implementation-status"><b>Status</b></a> &nbsp;·&nbsp;
-  <a href="docs/architecture/synchronization.md"><b>Sync</b></a> &nbsp;·&nbsp;
+  <a href="#role-and-boundaries"><b>Sync</b></a> &nbsp;·&nbsp;
   <a href="#getting-started"><b>Get started</b></a> &nbsp;·&nbsp;
   <a href="docs/architecture"><b>Docs</b></a>
 </p>
@@ -54,7 +54,7 @@
 | **Admin-Console** | [`Kemetra/Admin-Console`](https://github.com/Kemetra/Admin-Console) | Operator web UI · catalog · inventory views · sync ops |
 | **ERPNext-Connector** ◀ you are here | [`Kemetra/ERPNext-Connector`](https://github.com/Kemetra/ERPNext-Connector) | The only ERPNext/Frappe adapter · DocType mapping · posting |
 
-<sub>One architecture, one set of contracts, one AI-embedded design. POS and Admin-Console both synchronize through Backend-Core, the single contract boundary, which alone reaches ERPNext through this connector ([synchronization detail](docs/architecture/synchronization.md)). <a href="https://github.com/Kemetra/Orchestrator"><code>Kemetra/Orchestrator</code></a> is the technical handbook, not a track.</sub>
+<sub>One architecture, one set of contracts, one AI-embedded design. POS and Admin-Console both synchronize through Backend-Core, the single contract boundary, which alone reaches ERPNext through this connector ([flow and boundaries](#role-and-boundaries)). <a href="https://github.com/Kemetra/Orchestrator"><code>Kemetra/Orchestrator</code></a> is the technical handbook, not a track.</sub>
 
 ---
 
