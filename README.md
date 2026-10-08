@@ -1,6 +1,8 @@
 <div align="center">
 
-<img src="docs/assets/readme/hero.svg" alt="Retail Tower OS, ERPNext-Connector track: one product, four development tracks, with AI woven through all of them" width="100%"/>
+<h1 align="center">
+  <img src="docs/assets/readme/hero.svg" alt="Retail Tower OS, ERPNext-Connector track: one product, four development tracks, with AI woven through all of them" width="100%"/>
+</h1>
 
 <p align="center">
   <a href="#-one-project-four-tracks"><img alt="Retail Tower OS" src="https://img.shields.io/badge/Retail%20Tower-OS-0f766e?labelColor=0a0f24&style=flat-square"></a>
