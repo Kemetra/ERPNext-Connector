@@ -92,9 +92,17 @@ def _ack_key(work_item: PostingWorkItem, outcome: str) -> str:
     transient key also carries the offer's ``itemCursor``: stable across resends of ONE offer (resend
     dedup still holds) and different across re-offers (DP2 issues a new cursor per offer). The
     terminal ``posted`` / ``permanently_rejected`` keys are unchanged — they happen at most once.
+
+    RT-333: "at most once" holds per frozen resolution version. An operator re-resolution makes
+    the v2 attempt a NEW logical ack whose body echoes v2: under the v1 key it would be answered
+    ``409 idempotency_key_conflict`` and never reach the handler. So a versioned work item's
+    terminal keys carry ``:v{n}`` (stable across resends of one version); an unversioned (legacy)
+    work item keeps the plain key. The transient key already changes per offer.
     """
     if outcome == "failed_transient":
         return f"{work_item.work_item_ref}:failed_transient:{work_item.item_cursor}"
+    if work_item.resolution_version is not None:
+        return f"{work_item.work_item_ref}:{outcome}:v{work_item.resolution_version}"
     return f"{work_item.work_item_ref}:{outcome}"
 
 
