@@ -13,7 +13,8 @@ Backend-Core RT-332) before acking ``posted``:
   ``sale_post`` must cover exactly the frozen lines; a ``reversal`` (return / credit note) carries a
   subset of them;
 * items without ``rt_line_ref`` (documents from before line stamping) are compared by item code as a
-  multiset (equal for a ``sale_post``, contained for a ``reversal``).
+  multiset against the required lines no stamped item covered plus the sale lines that carry no
+  ``lineRef`` (a return requires only the lines it names).
 
 ``check_existing`` returns ``None`` when the document matches, otherwise a short human-readable reason
 (no credentials, no ERPNext internals) for the ``reconciliation_required`` ack. Reading the invoice is
@@ -66,9 +67,8 @@ def _warehouse_mismatch(work_item: PostingWorkItem, invoice: InvoiceSnapshot) ->
 
 def _required_lines(work_item: PostingWorkItem) -> list[str]:
 	"""The frozen line refs the document must carry: a return's returned lines, else every sale line."""
-	reversal = work_item.reversal_of
-	if reversal is not None and reversal.reversal_kind == "return":
-		return [line.line_ref for line in reversal.return_lines]
+	if _is_return(work_item):
+		return [line.line_ref for line in work_item.reversal_of.return_lines]
 	return [line.line_ref for line in work_item.sale.lines if line.line_ref]
 
 
@@ -89,11 +89,22 @@ def _item_mismatch(work_item: PostingWorkItem, invoice: InvoiceSnapshot) -> str 
 def _unstamped_expected(
 	work_item: PostingWorkItem, frozen: dict[str, str], required: list[str], stamped: list[InvoiceLine]
 ) -> Counter:
-	"""The item codes the UNSTAMPED rows must account for: the required lines no stamped row covered."""
-	if not frozen:  # a feed without line refs: compare every sale line by item code
-		return Counter(line.erpnext_item_ref.name for line in work_item.sale.lines)
+	"""The item codes the UNSTAMPED rows must account for.
+
+	That is the required lines no stamped row covered, plus every sale line without a ``lineRef``
+	(a legacy line can only be matched by item code). A return names its lines by ref, so it never
+	requires an unreferenced line.
+	"""
 	covered = {line.line_ref for line in stamped}
-	return Counter(frozen[ref] for ref in required if ref not in covered and ref in frozen)
+	expected = Counter(frozen[ref] for ref in required if ref not in covered and ref in frozen)
+	if not _is_return(work_item):
+		expected.update(line.erpnext_item_ref.name for line in work_item.sale.lines if not line.line_ref)
+	return expected
+
+
+def _is_return(work_item: PostingWorkItem) -> bool:
+	reversal = work_item.reversal_of
+	return reversal is not None and reversal.reversal_kind == "return"
 
 
 def _stamped_mismatch(frozen: dict[str, str], required: list[str], stamped: list[InvoiceLine]) -> str | None:

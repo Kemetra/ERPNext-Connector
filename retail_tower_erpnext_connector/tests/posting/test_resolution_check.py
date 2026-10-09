@@ -169,3 +169,41 @@ class TestReviewFindings:
 	def test_a_duplicate_stamped_line_is_a_mismatch(self):
 		dup = _invoice(("ITEM-A", "WH-F", _A), ("ITEM-A", "WH-F", _A), ("ITEM-B", "WH-F", _B))
 		assert check_existing(_item(), dup)
+
+
+def _mixed(kind="sale_post"):
+	"""A sale with a referenced ITEM-A line and a legacy (unreferenced) ITEM-B line."""
+	item = _item(kind)
+	wire_lines = [_line(_A, "ITEM-A"), {k: v for k, v in _line(None, "ITEM-B").items() if k != "lineRef"}]
+	return c.PostingWorkItem.from_wire(
+		{
+			"workItemRef": item.work_item_ref,
+			"kind": kind,
+			"sourceSystem": "pos-pulse",
+			"externalId": "POS-1",
+			"payloadHash": "a" * 64,
+			"businessDate": "2026-06-01",
+			"itemCursor": "7",
+			"resolutionVersion": 1,
+			"sale": {
+				"saleRef": item.sale.sale_ref,
+				"storeId": item.sale.store_id,
+				"currencyCode": "EGP",
+				"posTotal": "20.00",
+				"occurredAt": "2026-06-01T10:00:00Z",
+				"businessDate": "2026-06-01",
+				"sourceSystem": "pos-pulse",
+				"externalId": "POS-1",
+				"lines": wire_lines,
+				"warehouseRef": {"doctype": "Warehouse", "name": "WH-F"},
+			},
+		}
+	)
+
+
+class TestMixedReferencedAndLegacyLines:
+	def test_an_unreferenced_sale_line_missing_from_the_invoice_is_a_mismatch(self):
+		assert check_existing(_mixed(), _invoice(("ITEM-A", "WH-F", _A)))
+
+	def test_the_unreferenced_line_is_matched_by_item_code(self):
+		assert check_existing(_mixed(), _invoice(("ITEM-A", "WH-F", _A), ("ITEM-B", "WH-F", None))) is None
