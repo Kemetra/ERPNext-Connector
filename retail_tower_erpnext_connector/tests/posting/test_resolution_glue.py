@@ -237,7 +237,7 @@ class TestReplayVerification:
 					"documentRef": {"doctype": "Sales Invoice", "name": "ACC-SINV-2026-18000"},
 					"resolutionVersion": 2,
 				},
-				"key": f"{_REF}:posted",
+				"key": f"{_REF}:posted:v2",
 			}
 		]
 
@@ -247,7 +247,7 @@ class TestReplayVerification:
 		outcome, client = _post(glue, _work_item(), _Store(existing=_EXISTING))
 		assert outcome == "reconciliation_required"
 		ack = client.acks[0]
-		assert ack["key"] == f"{_REF}:reconciliation_required"
+		assert ack["key"] == f"{_REF}:reconciliation_required:v2"
 		assert ack["ack"]["outcome"] == "reconciliation_required"
 		assert ack["ack"]["documentRef"] == {"doctype": "Sales Invoice", "name": "ACC-SINV-2026-18000"}
 		assert ack["ack"]["reason"]["category"] == "validation"
@@ -258,7 +258,8 @@ class TestReplayVerification:
 		glue = load_glue(fake)
 		outcome, client = _post(glue, _work_item(), _Store(existing=_EXISTING))
 		assert outcome == "failed_transient"
-		assert client.acks[0]["ack"] == {"outcome": "failed_transient"}
+		# Echoed on every outcome, so Backend-Core can fence a superseded attempt (RT-333).
+		assert client.acks[0]["ack"] == {"outcome": "failed_transient", "resolutionVersion": 2}
 		assert client.acks[0]["key"] == f"{_REF}:failed_transient:9"
 
 	def test_a_legacy_work_item_echoes_posted_without_reading_the_invoice(self, load_glue):
@@ -303,3 +304,66 @@ class TestIdempotencyConflictIsVerified:
 			"doctype": "Sales Invoice",
 			"name": "ACC-SINV-2026-18000",
 		}
+
+
+class TestEveryAckEchoesTheVersion:
+	def test_a_rejection_echoes_the_resolution_version(self, load_glue):
+		fake = _Frappe()
+		glue = load_glue(fake)
+		item = _work_item()
+		client = _Client()
+		outcome = glue.post_work_item(
+			item,
+			client=client,
+			store=_Store(),
+			uom_map=UomMap({}),  # the line's unit is unmapped -> rejected
+			warehouses=PreResolvedWarehouse({_STORE: {"doctype": "Warehouse", "name": "Map WH"}}),
+			customers=StoreCustomerMap({_STORE: "Walk-in"}),
+			tenders=TenderModeMap({"cash": "Cash"}),
+			correlation_id="rt331-test",
+		)
+		assert outcome == "permanently_rejected"
+		assert client.acks[0]["ack"]["resolutionVersion"] == 2
+
+	def test_a_legacy_rejection_carries_no_version(self, load_glue):
+		fake = _Frappe()
+		glue = load_glue(fake)
+		client = _Client()
+		glue.post_work_item(
+			_work_item(version=None),
+			client=client,
+			store=_Store(),
+			uom_map=UomMap({}),
+			warehouses=PreResolvedWarehouse({_STORE: {"doctype": "Warehouse", "name": "Map WH"}}),
+			customers=StoreCustomerMap({_STORE: "Walk-in"}),
+			tenders=TenderModeMap({"cash": "Cash"}),
+			correlation_id="rt331-test",
+		)
+		assert "resolutionVersion" not in client.acks[0]["ack"]
+
+
+class TestTerminalAckKeysAreVersioned:
+	"""A rejection of v1 and one of v2 are different logical acks: one key would 409 the second."""
+
+	def _reject(self, glue, version):
+		client = _Client()
+		glue.post_work_item(
+			_work_item(version=version),
+			client=client,
+			store=_Store(),
+			uom_map=UomMap({}),
+			warehouses=PreResolvedWarehouse({_STORE: {"doctype": "Warehouse", "name": "Map WH"}}),
+			customers=StoreCustomerMap({_STORE: "Walk-in"}),
+			tenders=TenderModeMap({"cash": "Cash"}),
+			correlation_id="rt331-test",
+		)
+		return client.acks[0]["key"]
+
+	def test_each_resolution_version_rejects_under_its_own_key(self, load_glue):
+		glue = load_glue(_Frappe())
+		assert self._reject(glue, 1) == f"{_REF}:permanently_rejected:v1"
+		assert self._reject(glue, 2) == f"{_REF}:permanently_rejected:v2"
+
+	def test_an_unversioned_work_item_keeps_the_legacy_key(self, load_glue):
+		glue = load_glue(_Frappe())
+		assert self._reject(glue, None) == f"{_REF}:permanently_rejected"

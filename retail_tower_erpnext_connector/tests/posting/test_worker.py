@@ -226,3 +226,52 @@ class TestAckFailureIsolation:
         )
         assert result.degraded is True
         assert result.cursor == "page-1"
+
+
+class KeyRecordingClient:
+    """Records the full ack wire body and its idempotency key."""
+
+    def __init__(self):
+        self.acks: list[tuple[str, dict, str]] = []
+
+    def ack_outcome(self, work_item_ref, ack, *, idempotency_key=None):
+        self.acks.append((work_item_ref, ack.to_wire(), idempotency_key))
+        return {}
+
+
+def _reject_isolated(raw_item: dict) -> tuple[dict, str]:
+    page = {"items": [raw_item], "cursor": "page-1", "next_page_token": None}
+
+    class FakeTransport:
+        def get(self, path, *, params, headers):
+            return page
+
+        def post(self, path, *, json, headers):
+            return {}
+
+    recording = KeyRecordingClient()
+    w.process_page(
+        t.PostingFeedClient(FakeTransport(), correlation_id="r"), recording, since=None, post_valid=lambda wi: None
+    )
+    _, wire, key = recording.acks[0]
+    return wire, key
+
+
+class TestIsolatedRejectionCarriesTheVersion:
+    """RT-333: a malformed versioned item is fenced like any other attempt (Backend-Core #722)."""
+
+    def test_a_versioned_malformed_item_echoes_and_keys_its_version(self):
+        item = _bad_item("B")
+        item["resolutionVersion"] = 2
+        wire, key = _reject_isolated(item)
+        assert wire["resolutionVersion"] == 2
+        assert key == "wi-B:permanently_rejected:v2"
+
+    @pytest.mark.parametrize("bad_version", [None, 0, "2", True])
+    def test_an_unversioned_or_unreadable_version_keeps_the_legacy_ack(self, bad_version):
+        item = _bad_item("B")
+        if bad_version is not None:
+            item["resolutionVersion"] = bad_version
+        wire, key = _reject_isolated(item)
+        assert "resolutionVersion" not in wire
+        assert key == "wi-B:permanently_rejected"

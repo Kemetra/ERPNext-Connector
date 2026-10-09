@@ -105,10 +105,14 @@ def process_page(
             category="validation",  # closed 012 set; no `missing_erpnext_item_ref` wire category
             message=f"{bad.error_kind}: {bad.message}",
         )
+        # RT-333: echo (and key on) the item's resolution version when it is still readable, so
+        # Backend-Core can fence a rejection of a superseded version like any other attempt.
+        version = _raw_resolution_version(bad.raw)
+        key = f"{bad.work_item_ref}:permanently_rejected"
         ack_client.ack_outcome(
             bad.work_item_ref,
-            OutcomeAckRequest.permanently_rejected(reason),
-            idempotency_key=f"{bad.work_item_ref}:permanently_rejected",
+            OutcomeAckRequest.permanently_rejected(reason, resolution_version=version),
+            idempotency_key=key if version is None else f"{key}:v{version}",
         )
         rejected_refs.append(bad.work_item_ref)
 
@@ -135,3 +139,11 @@ def process_page(
         degraded=degraded,
         degraded_message="; ".join(parts) if parts else None,
     )
+
+
+def _raw_resolution_version(raw: dict) -> int | None:
+    """The malformed item's ``resolutionVersion`` when it is a positive integer, else ``None``."""
+    version = raw.get("resolutionVersion") if isinstance(raw, dict) else None
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        return None
+    return version
