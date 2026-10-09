@@ -282,3 +282,24 @@ class TestReconciliationReasonIsBounded:
 		assert outcome == "reconciliation_required"
 		message = client.acks[0]["ack"]["reason"]["message"]
 		assert 1 <= len(message) <= 1000
+
+
+class _ConflictStore(_Store):
+	"""``record_posted`` loses a race: another worker recorded ``existing`` for this key first."""
+
+	def record_posted(self, key, ref):
+		from retail_tower_erpnext_connector.connector.posting.idempotency import IdempotencyConflict
+
+		raise IdempotencyConflict(key, _EXISTING, ref)
+
+
+class TestIdempotencyConflictIsVerified:
+	def test_a_conflict_selected_document_is_verified_before_acking(self, load_glue):
+		fake = _Frappe(items=[{"item_code": "ITEM-OTHER", "warehouse": "Frozen WH", "rt_line_ref": _A}])
+		glue = load_glue(fake)
+		outcome, client = _post(glue, _work_item(), _ConflictStore())
+		assert outcome == "reconciliation_required"
+		assert client.acks[0]["ack"]["documentRef"] == {
+			"doctype": "Sales Invoice",
+			"name": "ACC-SINV-2026-18000",
+		}

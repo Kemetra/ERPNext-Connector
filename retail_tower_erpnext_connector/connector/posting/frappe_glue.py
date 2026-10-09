@@ -372,7 +372,9 @@ def post_work_item(
     try:
         store.record_posted(key, document_ref)
     except IdempotencyConflict as conflict:
-        document_ref = conflict.existing  # echo the already-recorded document (no duplicate)
+        # Another worker recorded a DIFFERENT document for this key first: that document is an
+        # EXISTING one, so it is verified against the frozen resolution like any other (RT-331).
+        return _ack_existing(client, work_item, conflict.existing, correlation_id, "posting.conflict")
 
     # T032 — ack posted + documentRef; the DP2 sale fact is never mutated.
     client.ack_outcome(
@@ -580,7 +582,8 @@ def _post_reversal(
     try:
         store.record_posted(key, document_ref)
     except IdempotencyConflict as conflict:
-        document_ref = conflict.existing
+        # Same as the forward sale: the concurrently recorded document is verified first (RT-331).
+        return _ack_existing(client, work_item, conflict.existing, correlation_id, "posting.conflict")
 
     client.ack_outcome(
         work_item.work_item_ref,
