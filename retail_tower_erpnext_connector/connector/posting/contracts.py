@@ -410,13 +410,18 @@ class Sale:
             external_id=str(wire["externalId"]),
             lines=lines,
             tenders=_parse_tenders(wire.get("tenders")),
-            warehouse_ref=_parse_warehouse_ref(wire.get("warehouseRef")),
+            warehouse_ref=_parse_warehouse_ref(wire.get("warehouseRef", _ABSENT)),
         )
 
 
+# An omitted optional field (the legacy, pre-freeze shape) — distinct from an explicit ``null``,
+# which the 012 contract does not allow for ``resolutionVersion`` / ``warehouseRef`` (PR #60 review).
+_ABSENT = object()
+
+
 def _parse_warehouse_ref(raw: object) -> dict | None:
-    """012 ``ErpnextWarehouseRef`` (RT-331): a strict ``{doctype: "Warehouse", name}`` or absent."""
-    if raw is None:
+    """012 ``ErpnextWarehouseRef`` (RT-331): a strict ``{doctype: "Warehouse", name}`` or absent (never null)."""
+    if raw is _ABSENT:
         return None
     if not isinstance(raw, Mapping) or raw.get("doctype") != "Warehouse":
         raise ValueError(f"Sale.warehouseRef must be a Warehouse reference, got {raw!r}")
@@ -427,8 +432,8 @@ def _parse_warehouse_ref(raw: object) -> dict | None:
 
 
 def _parse_resolution_version(raw: object) -> int | None:
-    """012 ``resolutionVersion`` (RT-331): a positive integer or absent (a bool is not an integer)."""
-    if raw is None:
+    """012 ``resolutionVersion`` (RT-331): a positive integer or absent, never null (a bool is not an integer)."""
+    if raw is _ABSENT:
         return None
     if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
         raise ValueError(f"resolutionVersion must be a positive integer, got {raw!r}")
@@ -479,7 +484,7 @@ class PostingWorkItem:
             sale=sale,
             item_cursor=str(wire["itemCursor"]),
             reversal_of=reversal_of,
-            resolution_version=_parse_resolution_version(wire.get("resolutionVersion")),
+            resolution_version=_parse_resolution_version(wire.get("resolutionVersion", _ABSENT)),
         )
 
     @property

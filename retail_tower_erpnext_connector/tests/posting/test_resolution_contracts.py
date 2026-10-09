@@ -80,6 +80,17 @@ class TestWorkItemFrozenResolution:
 		with pytest.raises(ValueError):
 			c.PostingWorkItem.from_wire(_wire(sale_extra={"warehouseRef": bad}))
 
+	def test_rejects_an_explicit_null_version(self):
+		# Omission is the legacy (pre-freeze) shape; an explicit null is malformed and must not
+		# silently disable the replay verification (PR #60 review).
+		with pytest.raises(ValueError):
+			c.PostingWorkItem.from_wire(_wire(resolutionVersion=None))
+
+	def test_rejects_an_explicit_null_warehouse_ref(self):
+		# An explicit null must not fall back to the mutable local warehouse map (PR #60 review).
+		with pytest.raises(ValueError):
+			c.PostingWorkItem.from_wire(_wire(resolutionVersion=2, sale_extra={"warehouseRef": None}))
+
 
 class TestAckFrozenResolution:
 	def test_posted_echoes_the_resolution_version(self):
