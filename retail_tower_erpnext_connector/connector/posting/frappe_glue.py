@@ -35,6 +35,7 @@ from .contracts import ErpnextDocumentRef, OutcomeAckRequest, PostingWorkItem
 from .idempotency import IdempotencyConflict, IdempotencyStore, key_for, provenance_id
 from .posting_time import PostingClock, PostingStamp, apply_stamp, raise_to_original, stamp_for
 from .reasons import FailureKind, scrub_message, to_rejection_reason
+from .resolution_check import InvoiceLine, InvoiceSnapshot, check_existing
 from .return_builder import (
     MissingRefundTenders,
     ReturnPricingMismatch,
@@ -126,6 +127,87 @@ def _dup_provenance_exceptions() -> tuple[type[BaseException], ...]:
     ) or (Exception,)
 
 
+def _warehouse_for(work_item: PostingWorkItem, warehouses: PreResolvedWarehouse):
+    """RT-331: the frozen warehouse from the feed (012 1.6.0-draft), else the local store map."""
+    frozen = work_item.sale.warehouse_ref
+    if frozen is None:
+        return warehouses.for_store
+    return lambda _store_id: dict(frozen)
+
+
+def _invoice_snapshot(document_ref: ErpnextDocumentRef) -> InvoiceSnapshot:
+    """⏳ BENCH-VALIDATION. Read back the parts of an existing Sales Invoice the frozen resolution checks."""
+    docstatus = frappe.db.get_value("Sales Invoice", document_ref.name, "docstatus")
+    rows = frappe.get_all(
+        "Sales Invoice Item",
+        filters={"parent": document_ref.name},
+        fields=["item_code", "warehouse", "rt_line_ref"],
+    )
+    return InvoiceSnapshot(
+        docstatus=int(docstatus or 0),
+        items=tuple(
+            InvoiceLine(item_code=r["item_code"], warehouse=r.get("warehouse"), line_ref=r.get("rt_line_ref"))
+            for r in rows
+        ),
+    )
+
+
+def _ack_existing(
+    client: PostingFeedClient,
+    work_item: PostingWorkItem,
+    document_ref: ErpnextDocumentRef,
+    correlation_id: str,
+    signal: str,
+) -> str:
+    """Ack a work item whose invoice ALREADY exists (replay guard or duplicate-provenance recovery).
+
+    RT-331: "matching provenance alone proves identity candidate, not correctness". When Backend-Core
+    sent a frozen resolution (``resolution_version``), the existing invoice is verified against it
+    first: a mismatch (or an unsubmitted document) acks ``reconciliation_required`` with the existing
+    ``documentRef`` — never a second document; an unreadable invoice acks ``failed_transient`` so
+    Backend-Core re-offers it — never a blind ``posted``. A work item without a frozen resolution
+    (older Backend-Core) echoes ``posted`` exactly as before.
+    """
+    version = work_item.resolution_version
+    if version is not None:
+        try:
+            mismatch = check_existing(work_item, _invoice_snapshot(document_ref))
+        except Exception as exc:  # the read failed: retry later, never assume the document matches.
+            client.ack_outcome(
+                work_item.work_item_ref,
+                OutcomeAckRequest.failed_transient(),
+                idempotency_key=_ack_key(work_item, "failed_transient"),
+            )
+            _log_signal("posting.verify.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
+            return "failed_transient"
+        if mismatch is not None:
+            client.ack_outcome(
+                work_item.work_item_ref,
+                OutcomeAckRequest.reconciliation_required(
+                    document_ref,
+                    # Bounded + scrubbed like every other reason (RT-48: 1..1000 chars).
+                    to_rejection_reason(FailureKind.VALIDATION, message=mismatch),
+                    resolution_version=version,
+                ),
+                idempotency_key=_ack_key(work_item, "reconciliation_required"),
+            )
+            _log_signal(
+                "posting.reconciliation_required",
+                work_item,
+                correlation_id,
+                document_ref=document_ref.name,
+                detail=mismatch,
+            )
+            return "reconciliation_required"
+    client.ack_outcome(
+        work_item.work_item_ref,
+        OutcomeAckRequest.posted(document_ref, resolution_version=version),
+        idempotency_key=_ack_key(work_item, "posted"),
+    )
+    _log_signal(signal, work_item, correlation_id, document_ref=document_ref.name)
+    return "posted"
+
+
 def _find_posted_invoice(work_item: PostingWorkItem) -> ErpnextDocumentRef | None:
     """Resolve the already-submitted Sales Invoice for this work-item's provenance (G5/F-002 recovery).
 
@@ -174,13 +256,7 @@ def post_work_item(
     # T041 — idempotent replay: an already-posted key echoes the existing documentRef.
     existing = store.get_document_ref(key)
     if existing is not None:
-        client.ack_outcome(
-            work_item.work_item_ref,
-            OutcomeAckRequest.posted(existing),
-            idempotency_key=_ack_key(work_item, "posted"),
-        )
-        _log_signal("posting.replay", work_item, correlation_id)
-        return "posted"
+        return _ack_existing(client, work_item, existing, correlation_id, "posting.replay")
 
     # F-001 — a `reversal` work-item posts a REVERSING document (a return Sales Invoice,
     # `is_return=1`), NOT a fresh positive Sales Invoice (012: kind=reversal). Arc A S1 routes it
@@ -216,7 +292,7 @@ def post_work_item(
         doc_payload = build_sales_invoice(
             work_item,
             uom_for=uom_map.resolve,
-            warehouse_for=warehouses.for_store,
+            warehouse_for=_warehouse_for(work_item, warehouses),
             customer_for=customers.for_store,
             posting_stamp=stamp,
             mode_of_payment_for=tenders.resolve,
@@ -277,13 +353,7 @@ def post_work_item(
             store.record_posted(key, document_ref)  # back-fill the missing Posting Log row
         except IdempotencyConflict as conflict:
             document_ref = conflict.existing
-        client.ack_outcome(
-            work_item.work_item_ref,
-            OutcomeAckRequest.posted(document_ref),
-            idempotency_key=_ack_key(work_item, "posted"),
-        )
-        _log_signal("posting.recovered", work_item, correlation_id, document_ref=document_ref.name)
-        return "posted"
+        return _ack_existing(client, work_item, document_ref, correlation_id, "posting.recovered")
     except frappe.ValidationError as exc:  # type: ignore[attr-defined]
         # T051 — validation failure → permanently_rejected / validation.
         return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
@@ -302,12 +372,14 @@ def post_work_item(
     try:
         store.record_posted(key, document_ref)
     except IdempotencyConflict as conflict:
-        document_ref = conflict.existing  # echo the already-recorded document (no duplicate)
+        # Another worker recorded a DIFFERENT document for this key first: that document is an
+        # EXISTING one, so it is verified against the frozen resolution like any other (RT-331).
+        return _ack_existing(client, work_item, conflict.existing, correlation_id, "posting.conflict")
 
     # T032 — ack posted + documentRef; the DP2 sale fact is never mutated.
     client.ack_outcome(
         work_item.work_item_ref,
-        OutcomeAckRequest.posted(document_ref),
+        OutcomeAckRequest.posted(document_ref, resolution_version=work_item.resolution_version),
         idempotency_key=_ack_key(work_item, "posted"),
     )
     _log_signal("posting.posted", work_item, correlation_id, document_ref=document_ref.name)
@@ -367,13 +439,7 @@ def _post_reversal(
     # Replay guard: an already-posted reversal key echoes the existing reversing-doc ref (T041).
     existing = store.get_document_ref(key)
     if existing is not None:
-        client.ack_outcome(
-            work_item.work_item_ref,
-            OutcomeAckRequest.posted(existing),
-            idempotency_key=_ack_key(work_item, "posted"),
-        )
-        _log_signal("posting.replay", work_item, correlation_id)
-        return "posted"
+        return _ack_existing(client, work_item, existing, correlation_id, "posting.replay")
 
     # RT-71 (RT-14 F1 / D8) — an amount-only refund would credit the WHOLE sale (the feed carries
     # every sale line and no refund amount). Reject it before building anything. AFTER the replay
@@ -507,13 +573,7 @@ def _post_reversal(
             store.record_posted(key, document_ref)
         except IdempotencyConflict as conflict:
             document_ref = conflict.existing
-        client.ack_outcome(
-            work_item.work_item_ref,
-            OutcomeAckRequest.posted(document_ref),
-            idempotency_key=_ack_key(work_item, "posted"),
-        )
-        _log_signal("posting.recovered", work_item, correlation_id, document_ref=document_ref.name)
-        return "posted"
+        return _ack_existing(client, work_item, document_ref, correlation_id, "posting.recovered")
     except frappe.ValidationError as exc:  # type: ignore[attr-defined]
         return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
     except Exception as exc:  # any OTHER error is non-retryable (F-005), not transient.
@@ -522,11 +582,12 @@ def _post_reversal(
     try:
         store.record_posted(key, document_ref)
     except IdempotencyConflict as conflict:
-        document_ref = conflict.existing
+        # Same as the forward sale: the concurrently recorded document is verified first (RT-331).
+        return _ack_existing(client, work_item, conflict.existing, correlation_id, "posting.conflict")
 
     client.ack_outcome(
         work_item.work_item_ref,
-        OutcomeAckRequest.posted(document_ref),
+        OutcomeAckRequest.posted(document_ref, resolution_version=work_item.resolution_version),
         idempotency_key=_ack_key(work_item, "posted"),
     )
     _log_signal("posting.posted", work_item, correlation_id, document_ref=document_ref.name)
@@ -559,13 +620,7 @@ def _recover_or_reject_unsupported(
         store.record_posted(key, document_ref)
     except IdempotencyConflict as conflict:
         document_ref = conflict.existing
-    client.ack_outcome(
-        work_item.work_item_ref,
-        OutcomeAckRequest.posted(document_ref),
-        idempotency_key=_ack_key(work_item, "posted"),
-    )
-    _log_signal("posting.recovered", work_item, correlation_id, document_ref=document_ref.name)
-    return "posted"
+    return _ack_existing(client, work_item, document_ref, correlation_id, "posting.recovered")
 
 
 _SUBMIT_SAVEPOINT = "rt_posting_submit"
@@ -698,7 +753,7 @@ def _build_reversal(
     if work_item.reversal_of is not None and work_item.reversal_of.reversal_kind == "return":
         resolvers = ReturnResolvers(
             uom_for=uom_map.resolve,
-            warehouse_for=warehouses.for_store,
+            warehouse_for=_warehouse_for(work_item, warehouses),
             customer_for=customers.for_store,
             mode_of_payment_for=tenders.resolve,
         )
@@ -706,7 +761,7 @@ def _build_reversal(
     return build_reversing_invoice(
         work_item,
         uom_for=uom_map.resolve,
-        warehouse_for=warehouses.for_store,
+        warehouse_for=_warehouse_for(work_item, warehouses),
         customer_for=customers.for_store,
         posting_stamp=stamp,
     )

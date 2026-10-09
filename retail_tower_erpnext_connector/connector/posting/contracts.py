@@ -29,7 +29,9 @@ REJECTION_CATEGORIES: frozenset[str] = frozenset(
 )
 
 # 012 OutcomeAckRequest.outcome enum.
-OUTCOMES: frozenset[str] = frozenset({"posted", "failed_transient", "permanently_rejected"})
+OUTCOMES: frozenset[str] = frozenset(
+    {"posted", "failed_transient", "permanently_rejected", "reconciliation_required"}
+)
 
 # 012 PostingWorkItem.kind enum.
 WORK_ITEM_KINDS: frozenset[str] = frozenset({"sale_post", "reversal"})
@@ -380,6 +382,9 @@ class Sale:
     lines: tuple[SaleLine, ...]
     # RT-78: how the sale was paid. Empty = tender-unknown (posted unpaid, as before — RT-10 D8).
     tenders: tuple[SaleTender, ...] = ()
+    # RT-331: the frozen ERP warehouse ({doctype: "Warehouse", name}) from Backend-Core's resolution
+    # (012 1.6.0-draft). None for an intent created before the freeze: the local warehouse map applies.
+    warehouse_ref: dict | None = None
 
     @classmethod
     def from_wire(cls, wire: Mapping[str, object]) -> Sale:
@@ -405,7 +410,34 @@ class Sale:
             external_id=str(wire["externalId"]),
             lines=lines,
             tenders=_parse_tenders(wire.get("tenders")),
+            warehouse_ref=_parse_warehouse_ref(wire.get("warehouseRef", _ABSENT)),
         )
+
+
+# An omitted optional field (the legacy, pre-freeze shape) — distinct from an explicit ``null``,
+# which the 012 contract does not allow for ``resolutionVersion`` / ``warehouseRef`` (PR #60 review).
+_ABSENT = object()
+
+
+def _parse_warehouse_ref(raw: object) -> dict | None:
+    """012 ``ErpnextWarehouseRef`` (RT-331): a strict ``{doctype: "Warehouse", name}`` or absent (never null)."""
+    if raw is _ABSENT:
+        return None
+    if not isinstance(raw, Mapping) or raw.get("doctype") != "Warehouse":
+        raise ValueError(f"Sale.warehouseRef must be a Warehouse reference, got {raw!r}")
+    name = raw.get("name")
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"Sale.warehouseRef.name must be a non-empty string, got {name!r}")
+    return {"doctype": "Warehouse", "name": name}
+
+
+def _parse_resolution_version(raw: object) -> int | None:
+    """012 ``resolutionVersion`` (RT-331): a positive integer or absent, never null (a bool is not an integer)."""
+    if raw is _ABSENT:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+        raise ValueError(f"resolutionVersion must be a positive integer, got {raw!r}")
+    return raw
 
 
 def _assert_return_lines_point_at_sale_lines(reversal_of: ReversalRef, sale: Sale) -> None:
@@ -429,6 +461,8 @@ class PostingWorkItem:
     sale: Sale
     item_cursor: str
     reversal_of: ReversalRef | None = None
+    # RT-331: the frozen resolution version (012 1.6.0-draft); echoed on the ack. None before the freeze.
+    resolution_version: int | None = None
 
     @classmethod
     def from_wire(cls, wire: Mapping[str, object]) -> PostingWorkItem:
@@ -450,6 +484,7 @@ class PostingWorkItem:
             sale=sale,
             item_cursor=str(wire["itemCursor"]),
             reversal_of=reversal_of,
+            resolution_version=_parse_resolution_version(wire.get("resolutionVersion", _ABSENT)),
         )
 
     @property
@@ -496,18 +531,38 @@ class OutcomeAckRequest:
     outcome: str
     document_ref: ErpnextDocumentRef | None = None
     reason: RejectionReason | None = None
+    # RT-331: echo of the work item's frozen resolution version (012 1.6.0-draft); None = omitted.
+    resolution_version: int | None = None
 
     def __post_init__(self) -> None:
         if self.outcome not in OUTCOMES:
             raise ValueError(f"outcome must be one of {sorted(OUTCOMES)}, got {self.outcome!r}")
-        if self.outcome == "posted" and self.document_ref is None:
-            raise ValueError("posted outcome requires a documentRef (012 OutcomeAckRequest)")
-        if self.outcome == "permanently_rejected" and self.reason is None:
-            raise ValueError("permanently_rejected outcome requires a reason (012)")
+        if self.outcome in ("posted", "reconciliation_required") and self.document_ref is None:
+            raise ValueError(f"{self.outcome} outcome requires a documentRef (012 OutcomeAckRequest)")
+        if self.outcome in ("permanently_rejected", "reconciliation_required") and self.reason is None:
+            raise ValueError(f"{self.outcome} outcome requires a reason (012)")
 
     @classmethod
-    def posted(cls, document_ref: ErpnextDocumentRef) -> OutcomeAckRequest:
-        return cls(outcome="posted", document_ref=document_ref)
+    def posted(
+        cls, document_ref: ErpnextDocumentRef, *, resolution_version: int | None = None
+    ) -> OutcomeAckRequest:
+        return cls(outcome="posted", document_ref=document_ref, resolution_version=resolution_version)
+
+    @classmethod
+    def reconciliation_required(
+        cls,
+        document_ref: ErpnextDocumentRef,
+        reason: RejectionReason,
+        *,
+        resolution_version: int | None = None,
+    ) -> OutcomeAckRequest:
+        """RT-331: an EXISTING ERP document does not match the work item's frozen resolution."""
+        return cls(
+            outcome="reconciliation_required",
+            document_ref=document_ref,
+            reason=reason,
+            resolution_version=resolution_version,
+        )
 
     @classmethod
     def failed_transient(cls) -> OutcomeAckRequest:
@@ -523,4 +578,6 @@ class OutcomeAckRequest:
             wire["documentRef"] = self.document_ref.to_wire()
         if self.reason is not None:
             wire["reason"] = self.reason.to_wire()
+        if self.resolution_version is not None:
+            wire["resolutionVersion"] = self.resolution_version
         return wire
