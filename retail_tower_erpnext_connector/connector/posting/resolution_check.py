@@ -53,8 +53,10 @@ def check_existing(work_item: PostingWorkItem, invoice: InvoiceSnapshot) -> str 
 
 
 def _warehouse_mismatch(work_item: PostingWorkItem, invoice: InvoiceSnapshot) -> str | None:
+	# Only a forward sale is held to the frozen warehouse: a reversal deliberately takes the
+	# ORIGINAL invoice rows' warehouses (link_void_to_original / link_return_to_original).
 	frozen = work_item.sale.warehouse_ref
-	if frozen is None:
+	if work_item.kind != "sale_post" or frozen is None:
 		return None
 	for line in invoice.items:
 		if line.warehouse != frozen["name"]:
@@ -62,28 +64,47 @@ def _warehouse_mismatch(work_item: PostingWorkItem, invoice: InvoiceSnapshot) ->
 	return None
 
 
+def _required_lines(work_item: PostingWorkItem) -> list[str]:
+	"""The frozen line refs the document must carry: a return's returned lines, else every sale line."""
+	reversal = work_item.reversal_of
+	if reversal is not None and reversal.reversal_kind == "return":
+		return [line.line_ref for line in reversal.return_lines]
+	return [line.line_ref for line in work_item.sale.lines if line.line_ref]
+
+
 def _item_mismatch(work_item: PostingWorkItem, invoice: InvoiceSnapshot) -> str | None:
 	frozen = {line.line_ref: line.erpnext_item_ref.name for line in work_item.sale.lines if line.line_ref}
+	required = _required_lines(work_item)
 	stamped = [line for line in invoice.items if line.line_ref is not None]
-	if stamped and len(stamped) == len(invoice.items):
-		return _by_line_ref(work_item.kind, frozen, stamped)
-	expected = Counter(line.erpnext_item_ref.name for line in work_item.sale.lines)
-	actual = Counter(line.item_code for line in invoice.items)
-	covered = actual == expected if work_item.kind == "sale_post" else not (actual - expected)
-	return (
-		None
-		if covered
-		else f"existing item codes {sorted(actual)} do not match the frozen {sorted(expected)}"
-	)
+	mismatch = _stamped_mismatch(frozen, required, stamped)
+	if mismatch is not None:
+		return mismatch
+	expected = _unstamped_expected(work_item, frozen, required, stamped)
+	actual = Counter(line.item_code for line in invoice.items if line.line_ref is None)
+	if actual != expected:
+		return f"existing item codes {sorted(actual)} do not match the frozen {sorted(expected)}"
+	return None
 
 
-def _by_line_ref(kind: str, frozen: dict[str, str], stamped: list[InvoiceLine]) -> str | None:
+def _unstamped_expected(
+	work_item: PostingWorkItem, frozen: dict[str, str], required: list[str], stamped: list[InvoiceLine]
+) -> Counter:
+	"""The item codes the UNSTAMPED rows must account for: the required lines no stamped row covered."""
+	if not frozen:  # a feed without line refs: compare every sale line by item code
+		return Counter(line.erpnext_item_ref.name for line in work_item.sale.lines)
+	covered = {line.line_ref for line in stamped}
+	return Counter(frozen[ref] for ref in required if ref not in covered and ref in frozen)
+
+
+def _stamped_mismatch(frozen: dict[str, str], required: list[str], stamped: list[InvoiceLine]) -> str | None:
+	"""Every stamped row is a distinct REQUIRED line carrying its frozen item."""
+	seen: set[str] = set()
 	for line in stamped:
-		expected = frozen.get(line.line_ref)
-		if expected is None:
-			return f"existing line {line.line_ref} is not a frozen sale line"
-		if line.item_code != expected:
-			return f"existing line {line.line_ref} is item {line.item_code!r}, frozen {expected!r}"
-	if kind == "sale_post" and {line.line_ref for line in stamped} != set(frozen):
-		return "existing document does not carry every frozen sale line"
+		if line.line_ref not in required:
+			return f"existing line {line.line_ref} is not a line this work item posts"
+		if line.line_ref in seen:
+			return f"existing document carries line {line.line_ref} more than once"
+		seen.add(line.line_ref)
+		if line.item_code != frozen.get(line.line_ref):
+			return f"existing line {line.line_ref} is item {line.item_code!r}, frozen {frozen.get(line.line_ref)!r}"
 	return None

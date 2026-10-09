@@ -102,8 +102,70 @@ class TestSalePost:
 
 
 class TestReversal:
-	def test_a_subset_of_the_frozen_lines_passes(self):
-		assert check_existing(_item("reversal"), _invoice(("ITEM-A", "WH-F", _A))) is None
+	def test_a_partial_return_passes_with_only_its_returned_line(self):
+		assert check_existing(_return(_A), _invoice(("ITEM-A", "WH-F", _A))) is None
 
 	def test_a_different_item_is_a_mismatch(self):
 		assert check_existing(_item("reversal"), _invoice(("ITEM-Z", "WH-F", _A)))
+
+
+def _return(*returned_refs):
+	item = _item("reversal")
+	wire_lines = [{"lineRef": ref, "quantity": "1", "lineAmount": "10.00"} for ref in returned_refs]
+	return c.PostingWorkItem.from_wire(
+		{
+			"workItemRef": "11111111-1111-4111-8111-111111111111",
+			"kind": "reversal",
+			"sourceSystem": "pos-pulse",
+			"externalId": "POS-1",
+			"payloadHash": "a" * 64,
+			"businessDate": "2026-06-01",
+			"itemCursor": "7",
+			"resolutionVersion": 1,
+			"sale": {
+				"saleRef": item.sale.sale_ref,
+				"storeId": item.sale.store_id,
+				"currencyCode": "EGP",
+				"posTotal": "20.00",
+				"occurredAt": "2026-06-01T10:00:00Z",
+				"businessDate": "2026-06-01",
+				"sourceSystem": "pos-pulse",
+				"externalId": "POS-1",
+				"lines": [_line(_A, "ITEM-A"), _line(_B, "ITEM-B")],
+				"warehouseRef": {"doctype": "Warehouse", "name": "WH-F"},
+			},
+			"reversalOf": {
+				"sourceSystem": "pos-pulse",
+				"externalId": "POS-1",
+				"reversalKind": "return",
+				"recordedAt": "2026-06-05T09:30:00Z",
+				"businessDate": "2026-06-05",
+				"returnLines": wire_lines,
+				"refundTenders": [{"method": "cash", "amount": "10.00"}],
+			},
+		}
+	)
+
+
+class TestReviewFindings:
+	def test_a_return_must_match_the_lines_it_returned_not_any_sale_line(self):
+		assert check_existing(_return(_A), _invoice(("ITEM-A", "WH-F", _A))) is None
+		assert check_existing(_return(_A), _invoice(("ITEM-B", "WH-F", _B)))
+
+	def test_a_void_must_cover_every_sale_line(self):
+		assert check_existing(_item("reversal"), _invoice(("ITEM-A", "WH-F", _A))) is not None
+		both = _invoice(("ITEM-A", "WH-F", _A), ("ITEM-B", "WH-F", _B))
+		assert check_existing(_item("reversal"), both) is None
+
+	def test_a_reversal_is_not_held_to_the_frozen_warehouse(self):
+		# The reversal deliberately takes the ORIGINAL invoice rows' warehouses.
+		original_rows = _invoice(("ITEM-A", "WH-ORIG", _A), ("ITEM-B", "WH-ORIG", _B))
+		assert check_existing(_item("reversal"), original_rows) is None
+
+	def test_stamped_rows_in_a_mixed_invoice_are_checked_by_identity(self):
+		mixed = _invoice(("ITEM-B", "WH-F", _A), ("ITEM-A", "WH-F", None))
+		assert check_existing(_item(), mixed)
+
+	def test_a_duplicate_stamped_line_is_a_mismatch(self):
+		dup = _invoice(("ITEM-A", "WH-F", _A), ("ITEM-A", "WH-F", _A), ("ITEM-B", "WH-F", _B))
+		assert check_existing(_item(), dup)
