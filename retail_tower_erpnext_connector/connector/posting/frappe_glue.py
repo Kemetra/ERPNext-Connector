@@ -175,7 +175,7 @@ def _ack_existing(
         except Exception as exc:  # the read failed: retry later, never assume the document matches.
             client.ack_outcome(
                 work_item.work_item_ref,
-                OutcomeAckRequest.failed_transient(),
+                OutcomeAckRequest.failed_transient(resolution_version=work_item.resolution_version),
                 idempotency_key=_ack_key(work_item, "failed_transient"),
             )
             _log_signal("posting.verify.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
@@ -324,7 +324,7 @@ def post_work_item(
         # T051 — transient (timeout/lock) → failed_transient; DP2 re-offers (no self-retry).
         client.ack_outcome(
             work_item.work_item_ref,
-            OutcomeAckRequest.failed_transient(),
+            OutcomeAckRequest.failed_transient(resolution_version=work_item.resolution_version),
             idempotency_key=_ack_key(work_item, "failed_transient"),
         )
         _log_signal("posting.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
@@ -498,7 +498,7 @@ def _post_reversal(
         # POSTING_RETRY_BUDGET bounds the wait and ends it as retry_budget_exhausted, not validation.
         client.ack_outcome(
             work_item.work_item_ref,
-            OutcomeAckRequest.failed_transient(),
+            OutcomeAckRequest.failed_transient(resolution_version=work_item.resolution_version),
             idempotency_key=_ack_key(work_item, "failed_transient"),
         )
         _log_signal(
@@ -551,7 +551,7 @@ def _post_reversal(
     except _transient_exceptions() as exc:
         client.ack_outcome(
             work_item.work_item_ref,
-            OutcomeAckRequest.failed_transient(),
+            OutcomeAckRequest.failed_transient(resolution_version=work_item.resolution_version),
             idempotency_key=_ack_key(work_item, "failed_transient"),
         )
         _log_signal("posting.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
@@ -836,7 +836,7 @@ def _reject(
     reason = to_rejection_reason(kind, message=message)  # scrubs the message (Gate G4)
     client.ack_outcome(
         work_item.work_item_ref,
-        OutcomeAckRequest.permanently_rejected(reason),
+        OutcomeAckRequest.permanently_rejected(reason, resolution_version=work_item.resolution_version),
         idempotency_key=_ack_key(work_item, "permanently_rejected"),
     )
     _log_signal("posting.rejected", work_item, correlation_id, category=reason.category)

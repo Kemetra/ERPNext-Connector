@@ -564,13 +564,17 @@ class OutcomeAckRequest:
             resolution_version=resolution_version,
         )
 
+    # The version is echoed on EVERY outcome so Backend-Core can fence an attempt from a
+    # superseded resolution (an operator re-resolved the intent meanwhile, RT-333).
     @classmethod
-    def failed_transient(cls) -> OutcomeAckRequest:
-        return cls(outcome="failed_transient")
+    def failed_transient(cls, *, resolution_version: int | None = None) -> OutcomeAckRequest:
+        return cls(outcome="failed_transient", resolution_version=resolution_version)
 
     @classmethod
-    def permanently_rejected(cls, reason: RejectionReason) -> OutcomeAckRequest:
-        return cls(outcome="permanently_rejected", reason=reason)
+    def permanently_rejected(
+        cls, reason: RejectionReason, *, resolution_version: int | None = None
+    ) -> OutcomeAckRequest:
+        return cls(outcome="permanently_rejected", reason=reason, resolution_version=resolution_version)
 
     def to_wire(self) -> dict[str, object]:
         wire: dict[str, object] = {"outcome": self.outcome}
