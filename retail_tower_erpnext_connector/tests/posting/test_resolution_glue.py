@@ -268,3 +268,17 @@ class TestReplayVerification:
 		assert outcome == "posted"
 		assert fake.reads == []
 		assert "resolutionVersion" not in client.acks[0]["ack"]
+
+
+class TestReconciliationReasonIsBounded:
+	def test_a_long_mismatch_reason_fits_the_ack_message_limit(self, load_glue):
+		rows = [
+			{"item_code": f"ITEM-LONG-CODE-{i:05d}", "warehouse": "Frozen WH", "rt_line_ref": None}
+			for i in range(300)
+		]
+		fake = _Frappe(items=rows)
+		glue = load_glue(fake)
+		outcome, client = _post(glue, _work_item(), _Store(existing=_EXISTING))
+		assert outcome == "reconciliation_required"
+		message = client.acks[0]["ack"]["reason"]["message"]
+		assert 1 <= len(message) <= 1000

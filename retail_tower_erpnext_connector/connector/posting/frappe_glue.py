@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 import frappe
 
 from .builder import UnmappedUnit, build_sales_invoice
-from .contracts import ErpnextDocumentRef, OutcomeAckRequest, PostingWorkItem, RejectionReason
+from .contracts import ErpnextDocumentRef, OutcomeAckRequest, PostingWorkItem
 from .idempotency import IdempotencyConflict, IdempotencyStore, key_for, provenance_id
 from .posting_time import PostingClock, PostingStamp, apply_stamp, raise_to_original, stamp_for
 from .reasons import FailureKind, scrub_message, to_rejection_reason
@@ -185,7 +185,8 @@ def _ack_existing(
                 work_item.work_item_ref,
                 OutcomeAckRequest.reconciliation_required(
                     document_ref,
-                    RejectionReason(category="validation", message=mismatch),
+                    # Bounded + scrubbed like every other reason (RT-48: 1..1000 chars).
+                    to_rejection_reason(FailureKind.VALIDATION, message=mismatch),
                     resolution_version=version,
                 ),
                 idempotency_key=_ack_key(work_item, "reconciliation_required"),
