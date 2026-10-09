@@ -207,3 +207,47 @@ class TestMixedReferencedAndLegacyLines:
 
 	def test_the_unreferenced_line_is_matched_by_item_code(self):
 		assert check_existing(_mixed(), _invoice(("ITEM-A", "WH-F", _A), ("ITEM-B", "WH-F", None))) is None
+
+
+def _refund():
+	"""A legacy refund reversal: unlinked, so its rows keep the frozen warehouse (not the original's)."""
+	item = _item("reversal")
+	return c.PostingWorkItem.from_wire(
+		{
+			"workItemRef": item.work_item_ref,
+			"kind": "reversal",
+			"sourceSystem": "pos-pulse",
+			"externalId": "POS-1",
+			"payloadHash": "a" * 64,
+			"businessDate": "2026-06-01",
+			"itemCursor": "7",
+			"resolutionVersion": 1,
+			"sale": {
+				"saleRef": item.sale.sale_ref,
+				"storeId": item.sale.store_id,
+				"currencyCode": "EGP",
+				"posTotal": "20.00",
+				"occurredAt": "2026-06-01T10:00:00Z",
+				"businessDate": "2026-06-01",
+				"sourceSystem": "pos-pulse",
+				"externalId": "POS-1",
+				"lines": [_line(_A, "ITEM-A"), _line(_B, "ITEM-B")],
+				"warehouseRef": {"doctype": "Warehouse", "name": "WH-F"},
+			},
+			"reversalOf": {
+				"sourceSystem": "pos-pulse",
+				"externalId": "POS-1",
+				"reversalKind": "refund",
+				"recordedAt": "2026-06-05T09:30:00Z",
+				"businessDate": "2026-06-05",
+			},
+		}
+	)
+
+
+class TestRefundIsHeldToTheFrozenWarehouse:
+	def test_a_refund_on_another_warehouse_is_a_mismatch(self):
+		assert check_existing(_refund(), _invoice(("ITEM-A", "WH-X", _A), ("ITEM-B", "WH-X", _B)))
+
+	def test_a_refund_on_the_frozen_warehouse_matches(self):
+		assert check_existing(_refund(), _invoice(("ITEM-A", "WH-F", _A), ("ITEM-B", "WH-F", _B))) is None

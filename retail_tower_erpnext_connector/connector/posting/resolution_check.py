@@ -8,7 +8,8 @@ work item, the connector compares it with the frozen resolution Backend-Core sen
 Backend-Core RT-332) before acking ``posted``:
 
 * the document must be submitted (``docstatus == 1``);
-* when ``sale.warehouseRef`` is frozen, every invoice item must carry that warehouse;
+* when ``sale.warehouseRef`` is frozen, every invoice item of a sale or a refund must carry that
+  warehouse (a void / return takes the original invoice's warehouses);
 * items stamped with ``rt_line_ref`` must match the frozen line's ERP item by identity. A
   ``sale_post`` must cover exactly the frozen lines; a ``reversal`` (return / credit note) carries a
   subset of them;
@@ -27,6 +28,9 @@ from collections import Counter
 from dataclasses import dataclass
 
 from .contracts import PostingWorkItem
+
+# Reversal kinds whose rows are re-pointed at the original invoice's rows (and warehouses).
+_LINKED_REVERSALS = frozenset({"void", "return"})
 
 
 @dataclass(frozen=True)
@@ -62,11 +66,17 @@ def _warehouse_mismatch(work_item: PostingWorkItem, invoice: InvoiceSnapshot) ->
 def _held_warehouse(work_item: PostingWorkItem) -> str | None:
 	"""The frozen warehouse the document is held to, if any.
 
-	Only a forward sale is held to it: a reversal deliberately takes the ORIGINAL invoice rows'
-	warehouses (link_void_to_original / link_return_to_original).
+	A void and a return are exempt: they deliberately take the ORIGINAL invoice rows' warehouses
+	(link_void_to_original / link_return_to_original). A sale and an (unlinked) refund keep the
+	warehouse ``_warehouse_for`` chose, so they are held to the frozen one.
 	"""
 	frozen = work_item.sale.warehouse_ref
-	return frozen["name"] if work_item.kind == "sale_post" and frozen is not None else None
+	return frozen["name"] if frozen is not None and not _links_to_original(work_item) else None
+
+
+def _links_to_original(work_item: PostingWorkItem) -> bool:
+	reversal = work_item.reversal_of
+	return reversal is not None and reversal.reversal_kind in _LINKED_REVERSALS
 
 
 def _required_lines(work_item: PostingWorkItem) -> list[str]:
